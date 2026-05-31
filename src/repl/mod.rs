@@ -2,7 +2,6 @@ use std::io::{self, BufRead, IsTerminal};
 
 use reedline::{ValidationResult, Validator};
 
-pub mod diagnostics;
 mod eval;
 pub mod highlighter;
 mod prompt;

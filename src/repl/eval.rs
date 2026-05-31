@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use crate::Result;
+use crate::diagnostic::attach_best_effort_span;
 use crate::eval::emit;
 use crate::lower::lower_file;
-use crate::repl::diagnostics::attach_best_effort_span;
 use crate::repl::semantic::SemanticState;
 use crate::resolve::modules::{Loader, eval_file};
 use crate::syntax::parser::parse;

@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use reconf::diagnostic::attach_best_effort_span;
 use reconf::emit::json::emit_json;
 use reconf::eval::Value;
 use reconf::lower::lower_file;
-use reconf::repl::diagnostics::attach_best_effort_span;
 use reconf::resolve::modules::{Loader, eval_file};
 use reconf::syntax::parser::parse;
 use reconf::{Error, Result};

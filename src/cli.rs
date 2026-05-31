@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
+use crate::diagnostic::attach_best_effort_span;
 use crate::emit::json::emit_json;
 use crate::eval::emit;
 use crate::lower::lower_file;
-use crate::repl::diagnostics::attach_best_effort_span;
 use crate::resolve::modules::{Loader, eval_file};
 use crate::syntax::parser::parse;
 use crate::{Result, repl};

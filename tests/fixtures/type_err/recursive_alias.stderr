@@ -1,3 +1,10 @@
 E_TYPE_002
 
   × recursive type alias `Loop`
+   ╭─[$RECONF/tests/fixtures/type_err/recursive_alias.reconf:1:6]
+ 1 │ type Loop = Loop;
+   ·      ──┬─
+   ·        ╰── recursive type alias `Loop`
+ 2 │ 
+ 3 │ 1
+   ╰────
