@@ -113,26 +113,6 @@ fn call(name: &str, args: Vec<Value>) -> Result<Value> {
             }
             Ok(Value::List(out))
         }
-        ("all", [Value::List(items), function]) => {
-            for item in items {
-                match apply_value(function.clone(), item.clone())? {
-                    Value::Bool(true) => {}
-                    Value::Bool(false) => return Ok(Value::Bool(false)),
-                    _ => return Err(Error::new("type mismatch: all predicate must return Bool")),
-                }
-            }
-            Ok(Value::Bool(true))
-        }
-        ("any", [Value::List(items), function]) => {
-            for item in items {
-                match apply_value(function.clone(), item.clone())? {
-                    Value::Bool(true) => return Ok(Value::Bool(true)),
-                    Value::Bool(false) => {}
-                    _ => return Err(Error::new("type mismatch: any predicate must return Bool")),
-                }
-            }
-            Ok(Value::Bool(false))
-        }
         _ => Err(Error::with_code(
             ErrorCode::TypeUnsupportedBuiltinArg,
             format!("type mismatch: invalid arguments to native `{name}`"),

@@ -37,6 +37,47 @@ fn eval_emits_json() {
 }
 
 #[test]
+fn eval_accepts_explicit_compact_json() {
+    let dir = tempfile_dir();
+    let file = dir.join("config.reconf");
+    fs::write(&file, r#"{ value = 1 }"#).unwrap();
+
+    let output = Command::new(bin())
+        .args([
+            "eval",
+            file.to_str().unwrap(),
+            "--format",
+            "json",
+            "--compact",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        r#"{"value":1}"#
+    );
+}
+
+#[test]
+fn explains_diagnostic_codes() {
+    let output = Command::new(bin())
+        .args(["--explain", "E_REFINE_004"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("E_REFINE_004"));
+    assert!(stdout.contains("refinement predicate"));
+}
+
+#[test]
 fn check_rejects_bad_refinement_with_miette_report() {
     let dir = tempfile_dir();
     let file = dir.join("bad.reconf");

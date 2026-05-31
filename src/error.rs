@@ -3,6 +3,12 @@ use std::sync::Arc;
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ErrorCodeInfo {
+    pub code: &'static str,
+    pub explanation: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     ParseEmptyInterpolation,
     ParseUnterminatedString,
@@ -26,7 +32,44 @@ pub enum ErrorCode {
     Reconf,
 }
 
+pub const ERROR_CODES: &[ErrorCode] = &[
+    ErrorCode::ParseEmptyInterpolation,
+    ErrorCode::ParseUnterminatedString,
+    ErrorCode::ModuleCycle,
+    ErrorCode::ModuleMissingImport,
+    ErrorCode::ModuleUnexportedImport,
+    ErrorCode::NameDuplicateImport,
+    ErrorCode::OutputFunction,
+    ErrorCode::RefineLiteralUnion,
+    ErrorCode::RefineFailed,
+    ErrorCode::RuntimeDivisionByZero,
+    ErrorCode::TypeBadInterpolation,
+    ErrorCode::TypeApplyNonFunction,
+    ErrorCode::TypeNoneNeedsExpected,
+    ErrorCode::TypeRecursiveAlias,
+    ErrorCode::TypeMismatch,
+    ErrorCode::TypeUnsupportedBuiltinArg,
+    ErrorCode::RecordDuplicateField,
+    ErrorCode::RecordMissingField,
+    ErrorCode::RecordUnknownField,
+    ErrorCode::Reconf,
+];
+
 impl ErrorCode {
+    pub fn from_code(code: &str) -> Option<Self> {
+        ERROR_CODES
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() == code)
+    }
+
+    pub fn info(self) -> ErrorCodeInfo {
+        ErrorCodeInfo {
+            code: self.as_str(),
+            explanation: self.explanation(),
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             ErrorCode::ParseEmptyInterpolation => "E_PARSE_006",
@@ -49,6 +92,31 @@ impl ErrorCode {
             ErrorCode::RecordMissingField => "E_RECORD_005",
             ErrorCode::RecordUnknownField => "E_RECORD_004",
             ErrorCode::Reconf => "reconf::error",
+        }
+    }
+
+    pub fn explanation(self) -> &'static str {
+        match self {
+            ErrorCode::ParseEmptyInterpolation => "empty string interpolation",
+            ErrorCode::ParseUnterminatedString => "unterminated string or interpolation",
+            ErrorCode::ModuleCycle => "cyclic module import",
+            ErrorCode::ModuleMissingImport => "missing module import path",
+            ErrorCode::ModuleUnexportedImport => "imported name is not exported by the module",
+            ErrorCode::NameDuplicateImport => "duplicate imported name",
+            ErrorCode::OutputFunction => "function value escaped into output",
+            ErrorCode::RefineLiteralUnion => "literal union refinement failed",
+            ErrorCode::RefineFailed => "refinement predicate evaluated to false",
+            ErrorCode::RuntimeDivisionByZero => "division by zero",
+            ErrorCode::TypeBadInterpolation => "invalid string interpolation expression",
+            ErrorCode::TypeApplyNonFunction => "attempted to apply a non-function value",
+            ErrorCode::TypeNoneNeedsExpected => "none needs an expected option type",
+            ErrorCode::TypeRecursiveAlias => "recursive type alias",
+            ErrorCode::TypeMismatch => "type mismatch",
+            ErrorCode::TypeUnsupportedBuiltinArg => "unsupported native function argument",
+            ErrorCode::RecordDuplicateField => "duplicate record field",
+            ErrorCode::RecordMissingField => "missing record field",
+            ErrorCode::RecordUnknownField => "unknown record field",
+            ErrorCode::Reconf => "uncategorized ReConf error",
         }
     }
 }

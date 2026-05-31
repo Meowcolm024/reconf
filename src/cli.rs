@@ -4,6 +4,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 use crate::diagnostic::attach_best_effort_span;
 use crate::emit::json::emit_json;
+use crate::error::ErrorCode;
 use crate::eval::emit;
 use crate::lower::lower_file;
 use crate::resolve::modules::{Loader, eval_file};
@@ -17,6 +18,8 @@ use crate::{Result, repl};
     about = "Check and evaluate ReConf configuration files"
 )]
 pub struct Cli {
+    #[arg(long, value_name = "CODE")]
+    explain: Option<String>,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -32,6 +35,8 @@ enum Command {
         format: OutputFormat,
         #[arg(long)]
         pretty: bool,
+        #[arg(long, conflicts_with = "pretty")]
+        compact: bool,
     },
     Repl,
 }
@@ -44,6 +49,11 @@ enum OutputFormat {
 
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(code) = cli.explain {
+        println!("{}", explain_code(&code));
+        return Ok(());
+    }
+
     match cli.command {
         Some(Command::Check { file }) => {
             let _ = eval_path(&file)?;
@@ -53,6 +63,7 @@ pub fn run() -> Result<()> {
             file,
             format,
             pretty,
+            compact: _,
         }) => {
             let value = eval_path(&file)?;
             let output = match format {
@@ -69,6 +80,13 @@ pub fn run() -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn explain_code(code: &str) -> String {
+    ErrorCode::from_code(code)
+        .map(|code| code.info())
+        .map(|info| format!("{}: {}", info.code, info.explanation))
+        .unwrap_or_else(|| "unknown diagnostic code".to_string())
 }
 
 fn eval_path(path: &PathBuf) -> Result<crate::eval::Value> {
