@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::{Compiler, emit_json};
+use crate::{Compiler, Diagnostic, emit_json};
 
 pub fn cli_main<I>(args: I) -> i32
 where
@@ -28,17 +28,19 @@ where
     let program = args.next().unwrap_or_else(|| "reconf".to_string());
     let Some(command) = args.next() else {
         return Err(format!(
-            "usage: {program} <check|eval> <file> [--format json] [--pretty|--compact]"
+            "usage: {program} <check|eval|--explain> <file|error-code> [--format json] [--pretty|--compact] [--no-color]"
         ));
     };
 
     match command.as_str() {
         "check" => {
             let Some(file) = args.next() else {
-                return Err(format!("usage: {program} check <file>"));
+                return Err(format!("usage: {program} check <file> [--no-color]"));
             };
-            if let Some(extra) = args.next() {
-                return Err(format!("unexpected argument for check: {extra}"));
+            for extra in args {
+                if extra != "--no-color" {
+                    return Err(format!("unexpected argument for check: {extra}"));
+                }
             }
             let mut compiler = Compiler::new();
             compiler
@@ -67,6 +69,7 @@ where
                     }
                     "--pretty" => pretty = true,
                     "--compact" => pretty = false,
+                    "--no-color" => {}
                     other => return Err(format!("unexpected argument for eval: {other}")),
                 }
                 idx += 1;
@@ -84,11 +87,22 @@ where
                 emit_json(&value, pretty).map_err(|err| compiler.render(err))?,
             ))
         }
+        "--explain" | "explain" => {
+            let Some(code) = args.next() else {
+                return Err(format!("usage: {program} --explain <error-code>"));
+            };
+            if let Some(extra) = args.next() {
+                return Err(format!("unexpected argument for --explain: {extra}"));
+            }
+            let explanation = Diagnostic::explain_code(&code)
+                .ok_or_else(|| format!("no explanation is available for `{code}`"))?;
+            Ok(Some(format!("{code}: {explanation}")))
+        }
         "--help" | "-h" | "help" => Ok(Some(format!(
-            "usage: {program} <check|eval> <file> [--format json] [--pretty|--compact]"
+            "usage: {program} <check|eval|--explain> <file|error-code> [--format json] [--pretty|--compact] [--no-color]"
         ))),
         other => Err(format!(
-            "unknown command `{other}`\nusage: {program} <check|eval> <file>"
+            "unknown command `{other}`\nusage: {program} <check|eval|--explain> <file|error-code>"
         )),
     }
 }

@@ -18,6 +18,11 @@ All implementation code is intended to be generated through AI-assisted developm
 
 The purpose of the experiment is to evaluate how far modern AI systems can be pushed when building a language implementation from a reasonably detailed specification.
 
+The repository now contains a working MVP compiler/interpreter for the subset
+described in [`doc/MVP.md`](doc/MVP.md). It is still experimental, but it can
+parse, type-check, normalize, validate refinements, resolve local modules, and
+emit deterministic JSON.
+
 ## What Is ReConf?
 
 ReConf is a small configuration language with:
@@ -44,6 +49,39 @@ let config = {
 
 config
 ``` 
+
+## Usage
+
+Run a ReConf file through the checker:
+
+```sh
+cargo run -- check examples/simple.reconf
+```
+
+Evaluate a file to normalized JSON:
+
+```sh
+cargo run -- eval examples/simple.reconf --format json
+```
+
+Compact JSON is available for scripts:
+
+```sh
+cargo run -- eval examples/simple.reconf --format json --compact
+```
+
+Explain a diagnostic code:
+
+```sh
+cargo run -- --explain E_REFINE_004
+```
+
+## Examples
+
+- [`examples/simple.reconf`](examples/simple.reconf) shows refinements,
+  optional fields, omitted `none`, and interpolation.
+- [`examples/modules/main.reconf`](examples/modules/main.reconf) shows local
+  module imports and exported definitions.
 
 ## Design Principles
 
@@ -91,18 +129,32 @@ These features are lowered into a smaller core language before type checking and
 
 ## Current State
 
-The language specification is still evolving.
+The language specification is still evolving, but the MVP implementation covers:
 
-Current design work focuses on:
+- Lexer and parser for the MVP syntax
+- Local module loading with export checks and cycle detection
+- Type aliases, records, lists, options, functions, and refinements
+- Contextual option elaboration and omitted option fields
+- Deterministic normalization and JSON output
+- Stable fixture tests for success cases, error codes, and selected diagnostics
+- CI-ready `cargo fmt`, `cargo test`, and `cargo clippy -- -D warnings`
 
-- Surface syntax
-- Core language definition
-- Type system rules
-- Refinement checking
-- Module semantics
-- Normalization behavior
+Implementation details may change as the experiment progresses. See
+[`doc/ROADMAP_STATUS.md`](doc/ROADMAP_STATUS.md) for current milestone status.
 
-Implementation details may change as the experiment progresses.
+## Development
+
+Run the full local gate:
+
+```sh
+cargo fmt
+cargo test
+cargo clippy -- -D warnings
+```
+
+The conformance suite is fixture-driven. Add positive examples with matching
+`.json` files, negative examples with matching `.err` files, and full diagnostic
+snapshots with `.stderr` files when the rendered message should stay stable.
 
 ## Inspiration
 
