@@ -1,0 +1,5 @@
+type Port = { x : Int | x > 1024 && x < 65535 };
+
+let bad = 80 : Port;
+
+bad

@@ -1,3 +1,3 @@
 fn main() {
-    println!("Hello, world!");
+    std::process::exit(reconf::cli_main(std::env::args()));
 }

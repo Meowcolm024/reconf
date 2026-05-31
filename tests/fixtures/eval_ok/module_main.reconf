@@ -1,0 +1,8 @@
+import "./module_lib.reconf": default_config, BaseConfig;
+
+let config = {
+  dir = default_config.dir,
+  retries = default_config.retries,
+} : BaseConfig;
+
+config
