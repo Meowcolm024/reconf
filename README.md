@@ -35,7 +35,15 @@ A ReConf program ultimately evaluates to normalized configuration data.
 
 Example:
 
-reconf type Port = { x : Int | x > 1024 && x < 65535 };  let config = {   port = 8080, } : { port : Port };  config 
+```reconf
+type Port = { x : Int | x > 1024 && x < 65535 };
+
+let config = {
+  port = 8080,
+} : { port : Port };
+
+config
+``` 
 
 ## Design Principles
 
