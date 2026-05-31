@@ -1,0 +1,10 @@
+E_RUNTIME_016
+
+  × division by zero
+   ╭─[$RECONF/tests/fixtures/runtime_err/division_by_zero.reconf:1:13]
+ 1 │ let bad = 1 / 0;
+   ·             ─┬─
+   ·              ╰── division by zero
+ 2 │ 
+ 3 │ bad
+   ╰────

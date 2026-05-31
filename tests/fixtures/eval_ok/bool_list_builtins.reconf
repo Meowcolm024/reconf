@@ -1,0 +1,15 @@
+type Config = {
+  all_true : Bool,
+  any_true : Bool,
+  empty_all : Bool,
+  empty_any : Bool,
+};
+
+let config = {
+  all_true = [true, true].all,
+  any_true = any [false, true],
+  empty_all = ([] : [Bool]).all,
+  empty_any = any ([] : [Bool]),
+} : Config;
+
+config

@@ -1,0 +1,45 @@
+%YAML 1.2
+---
+name: ReConf
+scope: source.reconf
+contexts:
+  main:
+    - include: comments
+    - include: keywords
+    - include: operators
+    - include: literals
+    - include: identifiers
+  comments:
+    - match: '#.*$'
+      scope: comment.line.number-sign.reconf
+  identifiers:
+    - match: '\b[A-Z][a-zA-Z0-9_-]*\b'
+      scope: entity.name.type.reconf
+    - match: '\b[a-z_][a-zA-Z0-9_-]*\b'
+      scope: variable.other.reconf
+  keywords:
+    - match: \b(if|then|else)\b
+      scope: keyword.control.reconf
+    - match: \b(import|export|native|type|let|in|some|none)\b
+      scope: keyword.other.reconf
+  literals:
+    - match: '\b[0-9]+\.[0-9]+\b'
+      scope: constant.numeric.float.reconf
+    - match: '\b[0-9]+\b'
+      scope: constant.numeric.integer.reconf
+    - match: \b(true|false)\b
+      scope: constant.language.boolean.reconf
+    - match: '"'
+      push:
+        - meta_scope: string.quoted.double.reconf
+        - match: '"'
+          pop: true
+        - match: '\\.'
+          scope: constant.character.escape.reconf
+        - match: '\{'
+          scope: punctuation.section.interpolation.begin.reconf
+        - match: '\}'
+          scope: punctuation.section.interpolation.end.reconf
+  operators:
+    - match: '(->|=>|==|!=|<=|>=|&&|\|\||\+\+|[+\-*/%<>=!:.,?{}\[\]().|])'
+      scope: keyword.operator.reconf

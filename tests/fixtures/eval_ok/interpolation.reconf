@@ -1,0 +1,8 @@
+let hello = (g : Bool) =>
+  if g then "Hallo" else "Hello";
+
+let msg =
+  let greeting = hello false in
+  "{greeting} world!";
+
+msg

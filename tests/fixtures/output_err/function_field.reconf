@@ -1,0 +1,3 @@
+{
+  hello = (g : Bool) => if g then "Hallo" else "Hello",
+}

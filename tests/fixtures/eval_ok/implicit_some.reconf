@@ -1,0 +1,9 @@
+type Config = {
+  port : Int?,
+};
+
+let config = {
+  port = 8080,
+} : Config;
+
+config

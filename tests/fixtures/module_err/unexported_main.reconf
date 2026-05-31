@@ -1,0 +1,3 @@
+import "./unexported_lib.reconf": hidden;
+
+hidden

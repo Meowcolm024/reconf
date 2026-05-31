@@ -1,0 +1,22 @@
+type AddrTy = "localhost" | "fixed";
+type AddrSchema = {
+  ty : AddrTy,
+  addr : String?,
+};
+
+type Addr =
+  { a : AddrSchema
+  | (a.ty == "localhost" && a.addr.isNone)
+    || (a.ty == "fixed" && a.addr.isSome)
+  };
+
+let local : Addr = {
+  ty = "localhost",
+};
+
+let fixed : Addr = {
+  ty = "fixed",
+  addr = "127.0.0.1",
+};
+
+[local, fixed]

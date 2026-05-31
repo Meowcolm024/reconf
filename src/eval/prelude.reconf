@@ -1,0 +1,14 @@
+export native let show : Int -> String;
+export native let length : [Int] -> Int;
+export native let isSome : Int? -> Bool;
+export native let isNone : Int? -> Bool;
+export native let contains : String -> String -> Bool;
+export native let startsWith : String -> String -> Bool;
+export native let endsWith : String -> String -> Bool;
+export native let unwrapOr : Int? -> Int -> Int;
+export native let all : [Bool] -> Bool;
+export native let any : [Bool] -> Bool;
+export native let map : [Int] -> (Int -> Int) -> [Int];
+export native let filter : [Int] -> (Int -> Bool) -> [Int];
+
+0

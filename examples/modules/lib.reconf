@@ -1,0 +1,11 @@
+export type BaseConfig = {
+  dir : String,
+  retries : Int,
+};
+
+export let default_config = {
+  dir = ".",
+  retries = 3,
+} : BaseConfig;
+
+default_config

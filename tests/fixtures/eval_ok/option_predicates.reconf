@@ -1,0 +1,19 @@
+type Config = {
+  explicit_some : Bool,
+  implicit_some : Bool,
+  explicit_none : Bool,
+  fallback : Int,
+};
+
+let a : Int? = some 1;
+let b : Int? = 2;
+let c : Int? = none;
+
+let config = {
+  explicit_some = a.isSome,
+  implicit_some = isSome b,
+  explicit_none = c.isNone,
+  fallback = unwrapOr c 7,
+} : Config;
+
+config

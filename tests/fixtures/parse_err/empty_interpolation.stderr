@@ -1,0 +1,8 @@
+E_PARSE_006
+
+  × parse error: empty interpolation
+   ╭─[$RECONF/tests/fixtures/parse_err/empty_interpolation.reconf:1:8]
+ 1 │ "hello {}"
+   ·        ─┬
+   ·         ╰── empty interpolation
+   ╰────
