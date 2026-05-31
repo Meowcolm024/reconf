@@ -1,81 +1,44 @@
+use serde_json::{Map, Number, Value as JsonValue};
+
 use crate::error::{Error, Result};
 use crate::eval::Value;
 
 pub fn emit_json(value: &Value, pretty: bool) -> Result<String> {
-    let mut out = String::new();
-    write_value(value, &mut out, pretty, 0)?;
-    Ok(out)
+    let json = to_json(value)?;
+    if pretty {
+        serde_json::to_string_pretty(&json)
+    } else {
+        serde_json::to_string(&json)
+    }
+    .map_err(|error| Error::new(format!("failed to emit JSON: {error}")))
 }
 
-fn write_value(value: &Value, out: &mut String, pretty: bool, indent: usize) -> Result<()> {
-    match value {
-        Value::Int(value) => out.push_str(&value.to_string()),
-        Value::Float(value) if value.is_finite() => out.push_str(&value.to_string()),
+fn to_json(value: &Value) -> Result<JsonValue> {
+    Ok(match value {
+        Value::Int(value) => JsonValue::Number(Number::from(*value)),
+        Value::Float(value) if value.is_finite() => Number::from_f64(*value)
+            .map(JsonValue::Number)
+            .ok_or_else(|| Error::new("non-finite float cannot be emitted as JSON"))?,
         Value::Float(_) => return Err(Error::new("non-finite float cannot be emitted as JSON")),
-        Value::Bool(value) => out.push_str(if *value { "true" } else { "false" }),
-        Value::String(value) => write_json_string(value, out),
-        Value::None => out.push_str("null"),
-        Value::Some(value) => write_value(value, out, pretty, indent)?,
-        Value::List(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                if pretty {
-                    out.push('\n');
-                    out.push_str(&" ".repeat(indent + 2));
-                }
-                write_value(item, out, pretty, indent + 2)?;
-            }
-            if pretty && !items.is_empty() {
-                out.push('\n');
-                out.push_str(&" ".repeat(indent));
-            }
-            out.push(']');
-        }
+        Value::Bool(value) => JsonValue::Bool(*value),
+        Value::String(value) => JsonValue::String(value.clone()),
+        Value::None => JsonValue::Null,
+        Value::Some(value) => to_json(value)?,
+        Value::List(items) => JsonValue::Array(
+            items
+                .iter()
+                .map(to_json)
+                .collect::<Result<Vec<JsonValue>>>()?,
+        ),
         Value::Record(fields) => {
-            out.push('{');
-            for (index, (name, value)) in fields.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                if pretty {
-                    out.push('\n');
-                    out.push_str(&" ".repeat(indent + 2));
-                }
-                write_json_string(name, out);
-                out.push(':');
-                if pretty {
-                    out.push(' ');
-                }
-                write_value(value, out, pretty, indent + 2)?;
+            let mut object = Map::new();
+            for (name, value) in fields {
+                object.insert(name.clone(), to_json(value)?);
             }
-            if pretty && !fields.is_empty() {
-                out.push('\n');
-                out.push_str(&" ".repeat(indent));
-            }
-            out.push('}');
+            JsonValue::Object(object)
         }
         Value::Closure { .. } | Value::Native(_) => {
             return Err(Error::new("function escaped into output"));
         }
-    }
-    Ok(())
-}
-
-fn write_json_string(value: &str, out: &mut String) {
-    out.push('"');
-    for c in value.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+    })
 }
