@@ -63,6 +63,10 @@ pub fn check_expr(
                 check_value_against(value, &Type::Record(fields), env, aliases)
             }
         }
+        Type::LiteralUnion(choices) => {
+            let value = check_expr(expr, &Type::String, env, aliases)?;
+            validate_literal_union(value, &choices, env, aliases)
+        }
         Type::Refinement { binder, base, pred } => {
             let value = check_expr(expr, &base, env, aliases)?;
             validate_refinement_with_code(
@@ -71,7 +75,7 @@ pub fn check_expr(
                 &pred,
                 env,
                 aliases,
-                refinement_error_code(&binder, &base),
+                ErrorCode::RefineFailed,
             )
         }
         other => {
@@ -135,6 +139,10 @@ pub fn check_value_against(
 ) -> Result<Value> {
     let expected = expand_type(expected, aliases)?;
     match &expected {
+        Type::LiteralUnion(choices) => {
+            let value = check_value_against(value, &Type::String, env, aliases)?;
+            validate_literal_union(value, choices, env, aliases)
+        }
         Type::Refinement { binder, base, pred } => {
             let value = check_value_against(value, base, env, aliases)?;
             validate_refinement_with_code(
@@ -143,7 +151,7 @@ pub fn check_value_against(
                 pred,
                 env,
                 aliases,
-                refinement_error_code(binder, base),
+                ErrorCode::RefineFailed,
             )
         }
         Type::Record(fields) => {
@@ -198,10 +206,23 @@ pub fn check_value_against(
     }
 }
 
-fn refinement_error_code(binder: &str, base: &Type) -> ErrorCode {
-    if binder == "x" && matches!(base, Type::String) {
-        ErrorCode::RefineLiteralUnion
-    } else {
-        ErrorCode::RefineFailed
+fn validate_literal_union(
+    value: Value,
+    choices: &[String],
+    _: &Env,
+    _: &BTreeMap<String, Type>,
+) -> Result<Value> {
+    match value {
+        Value::String(value) if choices.iter().any(|choice| choice == &value) => {
+            Ok(Value::String(value))
+        }
+        Value::String(_) => Err(Error::with_code(
+            ErrorCode::RefineLiteralUnion,
+            "literal union refinement failed",
+        )),
+        value => Err(Error::with_code(
+            ErrorCode::TypeMismatch,
+            format!("type mismatch: expected String, got {}", value_name(&value)),
+        )),
     }
 }

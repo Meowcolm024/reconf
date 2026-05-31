@@ -27,9 +27,7 @@ impl ReconfHighlighter {
     pub fn new(semantics: SemanticState) -> Self {
         let syntax_definition = SyntaxDefinition::load_from_str(SYNTAX_YAML, true, None)
             .expect("failed to load ReConf syntax definition");
-        let theme_settings =
-            serde_json::from_str(THEME_JSON).expect("failed to parse ReConf REPL theme");
-        let theme = Theme::parse_settings(theme_settings).expect("failed to load ReConf theme");
+        let theme = theme_for_test();
         let mut syntax_set = SyntaxSetBuilder::new();
         syntax_set.add(syntax_definition);
         Self {
@@ -69,6 +67,13 @@ impl reedline::Highlighter for ReconfHighlighter {
 
 pub fn syntax_definition_source() -> &'static str {
     SYNTAX_YAML
+}
+
+#[doc(hidden)]
+pub fn theme_for_test() -> Theme {
+    let theme_settings =
+        serde_json::from_str(THEME_JSON).expect("failed to parse ReConf REPL theme");
+    Theme::parse_settings(theme_settings).expect("failed to load ReConf theme")
 }
 
 pub fn semantic_type_spans_for_test(line: &str, semantics: &SemanticState) -> Vec<(usize, usize)> {

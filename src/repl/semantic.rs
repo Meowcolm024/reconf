@@ -73,7 +73,7 @@ impl TypeCollector {
 
     fn visit_type(&mut self, ty: &Type) {
         match ty {
-            Type::Int | Type::Float | Type::Bool | Type::String => {}
+            Type::Int | Type::Float | Type::Bool | Type::String | Type::LiteralUnion(_) => {}
             Type::Option(inner) | Type::List(inner) => self.visit_type(inner),
             Type::Record(fields) => {
                 for ty in fields.values() {

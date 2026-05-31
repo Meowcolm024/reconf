@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use crate::diagnostic::attach_best_effort_span;
 use crate::error::{Error, ErrorCode, Result};
 use crate::eval::builtins::{self, NativeFunction};
 use crate::eval::prelude;
@@ -55,12 +56,15 @@ impl Loader {
                 format!("unknown import `{}`: {e}", path.display()),
             )
         })?;
-        let ast = lower_file(parse(&src)?);
+        let name = path.display().to_string();
+        let ast =
+            lower_file(parse(&src).map_err(|error| attach_best_effort_span(error, &name, &src))?);
         let parent = path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
-        let module = eval_file(self, &parent, ast)?;
+        let module = eval_file(self, &parent, ast)
+            .map_err(|error| attach_best_effort_span(error, &name, &src))?;
         self.loading.remove(&path);
         self.cache.insert(path, module.clone());
         Ok(module)
@@ -178,6 +182,7 @@ fn type_mentions_alias(ty: &Type, name: &str) -> bool {
     match ty {
         Type::Alias(alias) => alias == name,
         Type::Option(inner) | Type::List(inner) => type_mentions_alias(inner, name),
+        Type::LiteralUnion(_) => false,
         Type::Record(fields) => fields.values().any(|ty| type_mentions_alias(ty, name)),
         Type::Refinement { base, .. } => type_mentions_alias(base, name),
         Type::Function(input, output) => {

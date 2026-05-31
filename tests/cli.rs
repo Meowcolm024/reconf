@@ -102,6 +102,32 @@ fn check_rejects_bad_refinement_with_miette_report() {
     assert!(stderr.contains("value does not satisfy refinement"));
 }
 
+#[test]
+fn check_reports_imported_file_error_locations() {
+    let dir = tempfile_dir();
+    let main = dir.join("main.reconf");
+    let lib = dir.join("lib.reconf");
+    fs::write(&main, r#"import "./lib.reconf": value; value"#).unwrap();
+    fs::write(
+        &lib,
+        r#"
+        export let value = "bad {}";
+        0
+        "#,
+    )
+    .unwrap();
+
+    let output = Command::new(bin())
+        .args(["check", main.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("lib.reconf"), "{stderr}");
+    assert!(stderr.contains("empty interpolation"), "{stderr}");
+}
+
 fn tempfile_dir() -> std::path::PathBuf {
     let mut dir = std::env::temp_dir();
     dir.push(format!(

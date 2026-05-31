@@ -1,5 +1,7 @@
 use reconf::repl::eval_for_test::ReplEvaluator;
-use reconf::repl::highlighter::{semantic_type_spans_for_test, syntax_definition_source};
+use reconf::repl::highlighter::{
+    semantic_type_spans_for_test, syntax_definition_source, theme_for_test,
+};
 use reconf::repl::is_complete_reconf_input;
 use reconf::repl::semantic::SemanticState;
 use reconf::syntax::parser::parse;
@@ -47,6 +49,23 @@ fn syntax_definition_keeps_builtins_and_types_out_of_keywords() {
 
     assert!(syntax.contains("entity.name.type.reconf"));
     assert!(syntax.contains("variable.other.reconf"));
+}
+
+#[test]
+fn repl_theme_loads_globals_and_font_styles() {
+    let theme = theme_for_test();
+
+    assert!(theme.settings.background.is_some());
+    assert!(theme.settings.caret.is_some());
+    assert!(theme.settings.selection.is_some());
+    assert!(theme.settings.line_highlight.is_some());
+    assert!(
+        theme
+            .scopes
+            .iter()
+            .any(|item| item.style.font_style.is_some()),
+        "theme should preserve scoped font styles"
+    );
 }
 
 #[test]

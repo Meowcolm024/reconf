@@ -44,6 +44,7 @@ fn lower_type(ty: Type) -> Type {
                 .map(|(name, ty)| (name, lower_type(ty)))
                 .collect(),
         ),
+        Type::LiteralUnion(choices) => Type::LiteralUnion(choices),
         Type::Refinement { binder, base, pred } => Type::Refinement {
             binder,
             base: Box::new(lower_type(*base)),

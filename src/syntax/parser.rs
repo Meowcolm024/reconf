@@ -322,22 +322,7 @@ fn build_type(pair: Pair<'_, Rule>) -> Result<Type> {
                 .into_inner()
                 .map(|p| unquote(p.as_str()))
                 .collect::<Result<Vec<_>>>()?;
-            let pred = choices
-                .into_iter()
-                .map(|choice| {
-                    Expr::Binary(
-                        "==".to_string(),
-                        Box::new(Expr::Var("x".to_string())),
-                        Box::new(Expr::String(choice)),
-                    )
-                })
-                .reduce(|a, b| Expr::Binary("||".to_string(), Box::new(a), Box::new(b)))
-                .unwrap_or(Expr::Bool(false));
-            Ok(Type::Refinement {
-                binder: "x".to_string(),
-                base: Box::new(Type::String),
-                pred: Box::new(pred),
-            })
+            Ok(Type::LiteralUnion(choices))
         }
         _ => Err(Error::new(format!(
             "parse error: unexpected type rule {:?}",

@@ -35,13 +35,9 @@ impl ParseSettings for Theme {
             Some(Value::Array(items)) => items,
             _ => return Err(IncorrectSyntax),
         };
-        let mut iter = items.into_iter();
-        let mut settings = match iter.next() {
-            Some(Value::Object(mut obj)) => match obj.remove("settings") {
-                Some(settings) => ThemeSettings::parse_settings(settings)?,
-                None => return Err(UndefinedSettings),
-            },
-            _ => return Err(UndefinedSettings),
+        let mut settings = match obj.remove("globals") {
+            Some(globals) => ThemeSettings::parse_settings(globals)?,
+            None => ThemeSettings::default(),
         };
         if let Some(Value::Object(obj)) = obj.remove("gutterSettings") {
             for (key, value) in obj {
@@ -56,7 +52,7 @@ impl ParseSettings for Theme {
             }
         }
         let mut scopes = Vec::new();
-        for json in iter {
+        for json in items {
             if let Ok(item) = ThemeItem::parse_settings(json) {
                 scopes.push(item);
             }
@@ -89,7 +85,7 @@ impl ParseSettings for StyleModifier {
             Value::Object(obj) => obj,
             _ => return Err(ColorShemeScopeIsNotObject),
         };
-        let font_style = match obj.remove("fontStyle") {
+        let font_style = match obj.remove("fontStyle").or_else(|| obj.remove("font_style")) {
             Some(Value::String(value)) => Some(FontStyle::from_str(&value)?),
             None => None,
             Some(c) => return Err(IncorrectFontStyle(c.to_string())),
@@ -125,9 +121,13 @@ impl ParseSettings for ThemeItem {
             Some(Value::String(value)) => ScopeSelectors::from_str(&value)?,
             _ => return Err(ScopeSelectorIsNotString(format!("{:?}", obj))),
         };
-        let style = match obj.remove("settings") {
-            Some(settings) => StyleModifier::parse_settings(settings)?,
-            None => return Err(IncorrectSettings),
+        let style = if let Some(Value::Object(mut style)) = obj.remove("settings") {
+            if let Some(font_style) = obj.remove("fontStyle").or_else(|| obj.remove("font_style")) {
+                style.insert("fontStyle".to_string(), font_style);
+            }
+            StyleModifier::parse_settings(Value::Object(style))?
+        } else {
+            StyleModifier::parse_settings(Value::Object(obj))?
         };
         Ok(ThemeItem { scope, style })
     }
@@ -149,7 +149,9 @@ impl ParseSettings for ThemeSettings {
                 "foreground" => settings.foreground = Color::parse_settings(value).ok(),
                 "background" => settings.background = Color::parse_settings(value).ok(),
                 "caret" => settings.caret = Color::parse_settings(value).ok(),
-                "lineHighlight" => settings.line_highlight = Color::parse_settings(value).ok(),
+                "lineHighlight" | "line_highlight" => {
+                    settings.line_highlight = Color::parse_settings(value).ok();
+                }
                 "selection" => settings.selection = Color::parse_settings(value).ok(),
                 "accent" => settings.accent = Color::parse_settings(value).ok(),
                 "guide" => settings.guide = Color::parse_settings(value).ok(),

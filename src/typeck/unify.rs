@@ -20,6 +20,7 @@ pub fn expand_type(ty: &Type, aliases: &BTreeMap<String, Type>) -> Result<Type> 
         }
         Type::Option(inner) => Ok(Type::Option(Box::new(expand_type(inner, aliases)?))),
         Type::List(inner) => Ok(Type::List(Box::new(expand_type(inner, aliases)?))),
+        Type::LiteralUnion(choices) => Ok(Type::LiteralUnion(choices.clone())),
         Type::Record(fields) => fields
             .iter()
             .map(|(name, ty)| Ok((name.clone(), expand_type(ty, aliases)?)))
@@ -48,6 +49,10 @@ pub fn matches_type(value: &Value, ty: &Type, aliases: &BTreeMap<String, Type>) 
         Type::Float => matches!(value, Value::Float(_) | Value::Int(_)),
         Type::Bool => matches!(value, Value::Bool(_)),
         Type::String => matches!(value, Value::String(_)),
+        Type::LiteralUnion(choices) => match value {
+            Value::String(value) => choices.iter().any(|choice| choice == value),
+            _ => false,
+        },
         Type::Option(inner) => match value {
             Value::None => true,
             Value::Some(value) => matches_type(value, &inner, aliases)?,
@@ -88,6 +93,7 @@ pub fn type_name(ty: &Type) -> &'static str {
         Type::Float => "Float",
         Type::Bool => "Bool",
         Type::String => "String",
+        Type::LiteralUnion(_) => "literal union",
         Type::Option(_) => "option",
         Type::List(_) => "list",
         Type::Record(_) => "record",

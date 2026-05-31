@@ -36,6 +36,7 @@ pub enum Type {
     Float,
     Bool,
     String,
+    LiteralUnion(Vec<String>),
     Option(Box<Type>),
     List(Box<Type>),
     Record(BTreeMap<String, Type>),

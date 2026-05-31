@@ -29,6 +29,7 @@ fn well_formed_type_inner(
             Ok(())
         }
         Type::Option(inner) | Type::List(inner) => well_formed_type_inner(inner, aliases, stack),
+        Type::LiteralUnion(_) => Ok(()),
         Type::Record(fields) => {
             for field in fields.values() {
                 well_formed_type_inner(field, aliases, stack)?;
