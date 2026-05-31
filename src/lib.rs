@@ -1,22 +1,31 @@
-pub mod ast;
+pub mod cli;
+pub mod core;
+pub mod diagnostic;
+pub mod emit;
 pub mod error;
 pub mod eval;
-pub mod parser;
-pub mod prelude;
+pub mod lower;
+pub mod refine;
 pub mod repl;
+pub mod resolve;
+pub mod source;
+pub mod syntax;
+pub mod typeck;
 
 pub use error::{Error, Result};
-pub use eval::run;
+pub use resolve::modules::run;
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use crate::eval::{Loader, emit, eval_file};
-    use crate::parser::parse;
+    use crate::eval::emit;
+    use crate::lower::lower_file;
+    use crate::resolve::modules::{Loader, eval_file};
+    use crate::syntax::parser::parse;
 
     fn eval_src(src: &str) -> crate::Result<String> {
-        let ast = parse(src)?;
+        let ast = lower_file(parse(src)?);
         let mut loader = Loader::default();
         let module = eval_file(&mut loader, Path::new("."), ast)?;
         emit(module.values.get("$output").unwrap())

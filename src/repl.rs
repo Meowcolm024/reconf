@@ -3,8 +3,10 @@ use std::path::Path;
 
 use reedline::{DefaultPrompt, DefaultPromptSegment, Reedline, Signal};
 
-use crate::eval::{Loader, emit, eval_file};
-use crate::parser::parse;
+use crate::eval::emit;
+use crate::lower::lower_file;
+use crate::resolve::modules::{Loader, eval_file};
+use crate::syntax::parser::parse;
 use crate::{Error, Result};
 
 pub fn run() -> Result<()> {
@@ -48,7 +50,7 @@ fn eval_snippet(src: &str) -> Result<String> {
     } else {
         src.to_string()
     };
-    let ast = parse(&source)?;
+    let ast = lower_file(parse(&source)?);
     let mut loader = Loader::default();
     let module = eval_file(&mut loader, Path::new("."), ast)?;
     emit(module.values.get("$output").unwrap())

@@ -4,11 +4,11 @@ use pest::Parser as PestParser;
 use pest::iterators::Pair;
 use pest_derive::Parser;
 
-use crate::ast::{Decl, Expr, FileAst, StrPart, Type};
 use crate::error::{Error, Result};
+use crate::syntax::surface::{Decl, Expr, FileAst, StrPart, Type};
 
 #[derive(Parser)]
-#[grammar = "reconf.pest"]
+#[grammar = "syntax/reconf.pest"]
 struct ReconfParser;
 
 pub fn parse(src: &str) -> Result<FileAst> {
