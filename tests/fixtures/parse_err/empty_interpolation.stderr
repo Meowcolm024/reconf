@@ -1,0 +1,4 @@
+error[E_PARSE_006]: empty interpolation
+  --> $FIXTURES/parse_err/empty_interpolation.reconf:1:8
+   1 | "hello {}"
+     |        ^^

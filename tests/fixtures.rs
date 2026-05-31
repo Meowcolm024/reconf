@@ -25,6 +25,13 @@ fn source_for_expected(expected: &Path) -> PathBuf {
     expected.with_extension("reconf")
 }
 
+fn normalize_diagnostic(text: &str) -> String {
+    let root = fixture_root();
+    text.replace(&root.display().to_string(), "$FIXTURES")
+        .trim_end()
+        .to_string()
+}
+
 #[test]
 fn eval_fixtures_match_json() {
     let mut expected_files = Vec::new();
@@ -78,5 +85,29 @@ fn error_fixtures_match_codes() {
         let expected = fs::read_to_string(&expected_path)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", expected_path.display()));
         assert_eq!(err.code(), expected.trim(), "{}", source_path.display());
+    }
+}
+
+#[test]
+fn diagnostic_snapshots_match() {
+    let mut expected_files = Vec::new();
+    collect_expected_files(&fixture_root(), "stderr", &mut expected_files);
+    expected_files.sort();
+
+    assert!(
+        !expected_files.is_empty(),
+        "expected at least one diagnostic snapshot"
+    );
+
+    for expected_path in expected_files {
+        let source_path = source_for_expected(&expected_path);
+        let mut compiler = Compiler::new();
+        let err = compiler
+            .check_file(&source_path)
+            .expect_err(&format!("{} unexpectedly passed", source_path.display()));
+        let actual = normalize_diagnostic(&compiler.render(err));
+        let expected = fs::read_to_string(&expected_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", expected_path.display()));
+        assert_eq!(actual, expected.trim_end(), "{}", source_path.display());
     }
 }
