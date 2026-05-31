@@ -1,4 +1,4 @@
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
 use crate::eval::{Value, apply_value};
 
 #[derive(Clone)]
@@ -133,9 +133,10 @@ fn call(name: &str, args: Vec<Value>) -> Result<Value> {
             }
             Ok(Value::Bool(false))
         }
-        _ => Err(Error::new(format!(
-            "type mismatch: invalid arguments to native `{name}`"
-        ))),
+        _ => Err(Error::with_code(
+            ErrorCode::TypeUnsupportedBuiltinArg,
+            format!("type mismatch: invalid arguments to native `{name}`"),
+        )),
     }
 }
 

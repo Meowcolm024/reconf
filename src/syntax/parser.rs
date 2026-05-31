@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
 use pest::Parser as PestParser;
+use pest::error::{Error as PestError, ErrorVariant, InputLocation};
 use pest::iterators::Pair;
 use pest_derive::Parser;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
 use crate::syntax::surface::{Decl, Expr, FileAst, StrPart, Type};
 
 #[derive(Parser)]
@@ -12,9 +13,138 @@ use crate::syntax::surface::{Decl, Expr, FileAst, StrPart, Type};
 struct ReconfParser;
 
 pub fn parse(src: &str) -> Result<FileAst> {
-    let mut pairs = ReconfParser::parse(Rule::file, src)
-        .map_err(|e| Error::new(format!("parse error: {e}")))?;
+    let mut pairs =
+        ReconfParser::parse(Rule::file, src).map_err(|error| parse_error(src, error))?;
     build_file(pairs.next().ok_or_else(|| Error::new("parse error"))?)
+}
+
+fn parse_error(src: &str, error: PestError<Rule>) -> Error {
+    let code = if src.contains("{}") {
+        ErrorCode::ParseEmptyInterpolation
+    } else if src.matches('"').count() % 2 == 1 {
+        ErrorCode::ParseUnterminatedString
+    } else {
+        ErrorCode::Reconf
+    };
+
+    let message = match &error.variant {
+        ErrorVariant::ParsingError {
+            positives,
+            negatives,
+        } => parse_expected_message(positives, negatives),
+        ErrorVariant::CustomError { message } => message.clone(),
+    };
+
+    let span = match error.location {
+        InputLocation::Pos(pos) => pos..pos.saturating_add(1),
+        InputLocation::Span((start, end)) => start..end.max(start.saturating_add(1)),
+    };
+
+    Error::with_code(code, format!("parse error: {message}"))
+        .with_source_span("<source>", src, span, message)
+}
+
+fn parse_expected_message(positives: &[Rule], negatives: &[Rule]) -> String {
+    match (positives.is_empty(), negatives.is_empty()) {
+        (false, false) => format!(
+            "unexpected {}; expected {}",
+            rule_list(negatives),
+            rule_list(positives)
+        ),
+        (false, true) => format!("expected {}", rule_list(positives)),
+        (true, false) => format!("unexpected {}", rule_list(negatives)),
+        (true, true) => "unknown parsing error".to_string(),
+    }
+}
+
+fn rule_list(rules: &[Rule]) -> String {
+    let mut names = rules.iter().map(rule_name).collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    match names.as_slice() {
+        [] => String::new(),
+        [one] => (*one).to_string(),
+        [first, second] => format!("{first} or {second}"),
+        _ => {
+            let last = names.pop().unwrap();
+            format!("{}, or {last}", names.join(", "))
+        }
+    }
+}
+
+fn rule_name(rule: &Rule) -> &'static str {
+    match rule {
+        Rule::EOI => "end of input",
+        Rule::WHITESPACE => "whitespace",
+        Rule::COMMENT => "comment",
+        Rule::ident => "identifier",
+        Rule::file => "file",
+        Rule::decl => "declaration",
+        Rule::import_decl => "import",
+        Rule::export_native_decl => "export native",
+        Rule::export_type_decl => "export type",
+        Rule::export_let_decl => "export let",
+        Rule::native_decl => "native",
+        Rule::type_decl => "type declaration",
+        Rule::top_let_decl => "let declaration",
+        Rule::ty => "type",
+        Rule::fun_ty => "function type",
+        Rule::postfix_ty => "postfix type",
+        Rule::primary_ty => "type",
+        Rule::base_ty => "primitive type",
+        Rule::type_alias => "type name",
+        Rule::list_ty => "list type",
+        Rule::paren_ty => "parenthesized type",
+        Rule::record_or_refinement_ty => "record or refinement type",
+        Rule::record_fields => "record fields",
+        Rule::field_ty => "field type",
+        Rule::refinement_body => "refinement body",
+        Rule::literal_union_ty => "literal union type",
+        Rule::expr => "expression",
+        Rule::let_expr => "let expression",
+        Rule::ascription_expr => "ascription",
+        Rule::if_expr => "if expression",
+        Rule::plain_expr => "expression",
+        Rule::logic_or => "or expression",
+        Rule::logic_and => "and expression",
+        Rule::equality => "equality expression",
+        Rule::relation => "comparison expression",
+        Rule::additive => "additive expression",
+        Rule::multiplicative => "multiplicative expression",
+        Rule::unary => "unary expression",
+        Rule::application => "function application",
+        Rule::postfix => "postfix expression",
+        Rule::method_call => "method call",
+        Rule::field_access => "field access",
+        Rule::primary => "expression",
+        Rule::option_expr => "option",
+        Rule::none_expr => "none",
+        Rule::some_expr => "some",
+        Rule::ident_expr => "identifier",
+        Rule::record_expr => "record",
+        Rule::field_expr => "field",
+        Rule::list_expr => "list",
+        Rule::lambda_expr => "lambda",
+        Rule::paren_expr => "parenthesized expression",
+        Rule::literal => "literal",
+        Rule::bool_lit => "bool",
+        Rule::int_lit => "int",
+        Rule::float_lit => "float",
+        Rule::string_lit => "string",
+        Rule::escaped_char => "escaped character",
+        Rule::or_op => "`||`",
+        Rule::and_op => "`&&`",
+        Rule::eq_op => "equality operator",
+        Rule::rel_op => "comparison operator",
+        Rule::add_op => "additive operator",
+        Rule::mul_op => "multiplicative operator",
+        Rule::unary_op => "unary operator",
+        Rule::name => "name",
+        Rule::type_name => "type name",
+        Rule::keyword => "keyword",
+        Rule::lower => "lowercase letter",
+        Rule::upper => "uppercase letter",
+    }
 }
 
 fn build_file(pair: Pair<'_, Rule>) -> Result<FileAst> {
@@ -165,7 +295,10 @@ fn build_type(pair: Pair<'_, Rule>) -> Result<Type> {
                         let name = items.next().unwrap().as_str().to_string();
                         let ty = build_type(items.next().unwrap())?;
                         if fields.insert(name.clone(), ty).is_some() {
-                            return Err(Error::new(format!("duplicate field `{name}`")));
+                            return Err(Error::with_code(
+                                ErrorCode::RecordDuplicateField,
+                                format!("duplicate field `{name}`"),
+                            ));
                         }
                     }
                     Ok(Type::Record(fields))
@@ -289,7 +422,10 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr> {
                 let name = inner.next().unwrap().as_str().to_string();
                 let value = build_expr(inner.next().unwrap())?;
                 if fields.insert(name.clone(), value).is_some() {
-                    return Err(Error::new(format!("duplicate field `{name}`")));
+                    return Err(Error::with_code(
+                        ErrorCode::RecordDuplicateField,
+                        format!("duplicate field `{name}`"),
+                    ));
                 }
             }
             Ok(Expr::Record(fields))
@@ -394,7 +530,10 @@ fn build_string(raw: &str) -> Result<Expr> {
                     i += 1;
                 }
                 if depth != 0 {
-                    return Err(Error::new("parse error: unterminated interpolation"));
+                    return Err(Error::with_code(
+                        ErrorCode::ParseUnterminatedString,
+                        "parse error: unterminated interpolation",
+                    ));
                 }
                 let inner: String = chars[start..i - 1].iter().collect();
                 parts.push(StrPart::Expr(parse_expr_fragment(&inner)?));
@@ -418,8 +557,13 @@ fn build_string(raw: &str) -> Result<Expr> {
 }
 
 fn parse_expr_fragment(src: &str) -> Result<Expr> {
-    let mut pairs = ReconfParser::parse(Rule::expr, src)
-        .map_err(|e| Error::new(format!("parse error: {e}")))?;
+    if src.trim().is_empty() {
+        return Err(Error::with_code(
+            ErrorCode::ParseEmptyInterpolation,
+            "parse error: empty interpolation",
+        ));
+    }
+    let mut pairs = ReconfParser::parse(Rule::expr, src).map_err(|e| parse_error(src, e))?;
     build_expr(pairs.next().unwrap())
 }
 

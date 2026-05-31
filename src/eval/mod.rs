@@ -5,7 +5,7 @@ use std::rc::Rc;
 pub mod builtins;
 pub mod prelude;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
 use crate::eval::builtins::NativeFunction;
 use crate::syntax::surface::{Expr, Type};
 use crate::typeck::bidir::check_expr;
@@ -159,7 +159,10 @@ fn apply(function: Value, arg: Value, aliases: &BTreeMap<String, Type>) -> Resul
     match function {
         Value::Closure { param, body, env } => eval(&body, &env_with(&env, param, arg), aliases),
         Value::Native(function) => function.apply(arg),
-        _ => Err(Error::new("type mismatch: applying non-function")),
+        _ => Err(Error::with_code(
+            ErrorCode::TypeApplyNonFunction,
+            "type mismatch: applying non-function",
+        )),
     }
 }
 
@@ -168,9 +171,9 @@ fn binary(op: &str, a: Value, b: Value) -> Result<Value> {
         ("+", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
         ("-", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
         ("*", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
-        ("/", Value::Int(_), Value::Int(0)) | ("%", Value::Int(_), Value::Int(0)) => {
-            Err(Error::new("division by zero"))
-        }
+        ("/", Value::Int(_), Value::Int(0)) | ("%", Value::Int(_), Value::Int(0)) => Err(
+            Error::with_code(ErrorCode::RuntimeDivisionByZero, "division by zero"),
+        ),
         ("/", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
         ("%", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
         ("+", Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),

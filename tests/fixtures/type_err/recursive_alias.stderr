@@ -1,4 +1,3 @@
-error[E_TYPE_002]: recursive type alias `Loop`
-  --> $FIXTURES/type_err/recursive_alias.reconf:1:13
-   1 | type Loop = Loop;
-     |             ^^^^
+E_TYPE_002
+
+  × recursive type alias `Loop`

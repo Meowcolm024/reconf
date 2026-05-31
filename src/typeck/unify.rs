@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
 use crate::eval::Value;
 use crate::syntax::surface::Type;
 
@@ -10,6 +10,12 @@ pub fn expand_type(ty: &Type, aliases: &BTreeMap<String, Type>) -> Result<Type> 
             let ty = aliases
                 .get(name)
                 .ok_or_else(|| Error::new(format!("unknown type `{name}`")))?;
+            if matches!(ty, Type::Alias(alias) if alias == name) {
+                return Err(Error::with_code(
+                    ErrorCode::TypeRecursiveAlias,
+                    format!("recursive type alias `{name}`"),
+                ));
+            }
             expand_type(ty, aliases)
         }
         Type::Option(inner) => Ok(Type::Option(Box::new(expand_type(inner, aliases)?))),

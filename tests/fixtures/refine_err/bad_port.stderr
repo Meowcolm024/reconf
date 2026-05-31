@@ -1,5 +1,12 @@
-error[E_REFINE_004]: refinement failed
-  --> $FIXTURES/refine_err/bad_port.reconf:3:11
-   3 | let bad = 80 : Port;
-     |           ^^
-     = note: value `80` does not satisfy { x : Int | ... }
+E_REFINE_004
+
+  × refinement failed
+   ╭─[$RECONF/tests/fixtures/refine_err/bad_port.reconf:3:11]
+ 1 │ type Port = { x : Int | x > 1024 && x < 65535 };
+ 2 │ 
+ 3 │ let bad = 80 : Port;
+   ·           ─┬
+   ·            ╰── value does not satisfy refinement
+ 4 │ 
+ 5 │ bad
+   ╰────

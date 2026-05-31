@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
 use crate::eval::builtins::{self, NativeFunction};
 use crate::eval::prelude;
 use crate::eval::{Value, contains_function, emit};
@@ -34,17 +34,27 @@ pub struct Loader {
 
 impl Loader {
     pub fn load(&mut self, path: &Path) -> Result<Module> {
-        let path = path
-            .canonicalize()
-            .map_err(|e| Error::new(format!("unknown import `{}`: {e}", path.display())))?;
+        let path = path.canonicalize().map_err(|e| {
+            Error::with_code(
+                ErrorCode::ModuleMissingImport,
+                format!("unknown import `{}`: {e}", path.display()),
+            )
+        })?;
         if let Some(module) = self.cache.get(&path) {
             return Ok(module.clone());
         }
         if !self.loading.insert(path.clone()) {
-            return Err(Error::new(format!("cyclic import `{}`", path.display())));
+            return Err(Error::with_code(
+                ErrorCode::ModuleCycle,
+                format!("cyclic import `{}`", path.display()),
+            ));
         }
-        let src = fs::read_to_string(&path)
-            .map_err(|e| Error::new(format!("unknown import `{}`: {e}", path.display())))?;
+        let src = fs::read_to_string(&path).map_err(|e| {
+            Error::with_code(
+                ErrorCode::ModuleMissingImport,
+                format!("unknown import `{}`: {e}", path.display()),
+            )
+        })?;
         let ast = lower_file(parse(&src)?);
         let parent = path
             .parent()
@@ -87,7 +97,10 @@ fn eval_file_inner(
                 let imported = loader.load(&base_dir.join(path))?;
                 for name in names {
                     if module.values.contains_key(&name) || module.types.contains_key(&name) {
-                        return Err(Error::new(format!("duplicate import `{name}`")));
+                        return Err(Error::with_code(
+                            ErrorCode::NameDuplicateImport,
+                            format!("duplicate import `{name}`"),
+                        ));
                     }
                     match imported.exports.get(&name) {
                         Some(Export::Value(value)) => {
@@ -96,7 +109,12 @@ fn eval_file_inner(
                         Some(Export::Type(ty)) => {
                             module.types.insert(name, ty.clone());
                         }
-                        None => return Err(Error::new(format!("unexported import `{name}`"))),
+                        None => {
+                            return Err(Error::with_code(
+                                ErrorCode::ModuleUnexportedImport,
+                                format!("unexported import `{name}`"),
+                            ));
+                        }
                     }
                 }
             }
@@ -111,6 +129,12 @@ fn eval_file_inner(
                 }
             }
             Decl::Type { export, name, ty } => {
+                if type_mentions_alias(&ty, &name) {
+                    return Err(Error::with_code(
+                        ErrorCode::TypeRecursiveAlias,
+                        format!("recursive type alias `{name}`"),
+                    ));
+                }
                 well_formed_type(&ty, &module.types)?;
                 module.types.insert(name.clone(), ty.clone());
                 if export {
@@ -141,10 +165,26 @@ fn eval_file_inner(
     let env = Rc::new(module.values.clone());
     let output = synth_expr(&ast.output, &env, &module.types)?;
     if contains_function(&output) {
-        return Err(Error::new("function escaped into output"));
+        return Err(Error::with_code(
+            ErrorCode::OutputFunction,
+            "function escaped into output",
+        ));
     }
     module.values.insert("$output".to_string(), output);
     Ok(module)
+}
+
+fn type_mentions_alias(ty: &Type, name: &str) -> bool {
+    match ty {
+        Type::Alias(alias) => alias == name,
+        Type::Option(inner) | Type::List(inner) => type_mentions_alias(inner, name),
+        Type::Record(fields) => fields.values().any(|ty| type_mentions_alias(ty, name)),
+        Type::Refinement { base, .. } => type_mentions_alias(base, name),
+        Type::Function(input, output) => {
+            type_mentions_alias(input, name) || type_mentions_alias(output, name)
+        }
+        Type::Int | Type::Float | Type::Bool | Type::String => false,
+    }
 }
 
 pub fn run(path: &Path) -> Result<String> {

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
 use crate::eval::{Env, Value, eval};
-use crate::refine::validate::validate_refinement;
+use crate::refine::validate::validate_refinement_with_code;
 use crate::syntax::surface::{Expr, Type};
 use crate::typeck::unify::{expand_type, is_option_type, matches_type, type_name, value_name};
 
@@ -35,7 +35,10 @@ pub fn check_expr(
                 let mut out = BTreeMap::new();
                 for name in expr_fields.keys() {
                     if !fields.contains_key(name) {
-                        return Err(Error::new(format!("unknown field `{name}`")));
+                        return Err(Error::with_code(
+                            ErrorCode::RecordUnknownField,
+                            format!("unknown field `{name}`"),
+                        ));
                     }
                 }
                 for (name, ty) in fields {
@@ -46,7 +49,12 @@ pub fn check_expr(
                         None if is_option_type(&ty, aliases)? => {
                             out.insert(name, Value::None);
                         }
-                        None => return Err(Error::new(format!("missing field `{name}`"))),
+                        None => {
+                            return Err(Error::with_code(
+                                ErrorCode::RecordMissingField,
+                                format!("missing field `{name}`"),
+                            ));
+                        }
                     }
                 }
                 Ok(Value::Record(out))
@@ -57,7 +65,14 @@ pub fn check_expr(
         }
         Type::Refinement { binder, base, pred } => {
             let value = check_expr(expr, &base, env, aliases)?;
-            validate_refinement(value, &binder, &pred, env, aliases)
+            validate_refinement_with_code(
+                value,
+                &binder,
+                &pred,
+                env,
+                aliases,
+                refinement_error_code(&binder, &base),
+            )
         }
         other => {
             let value = eval(expr, env, aliases)?;
@@ -68,12 +83,48 @@ pub fn check_expr(
 
 pub fn synth_expr(expr: &Expr, env: &Env, aliases: &BTreeMap<String, Type>) -> Result<Value> {
     match expr {
-        Expr::None => Err(Error::new("`none` requires an expected option type")),
-        Expr::List(items) if items.is_empty() => {
-            Err(Error::new("empty lists require an expected list type"))
+        Expr::None => Err(Error::with_code(
+            ErrorCode::TypeNoneNeedsExpected,
+            "`none` requires an expected option type",
+        )),
+        Expr::List(items) if items.is_empty() => Err(Error::with_code(
+            ErrorCode::TypeNoneNeedsExpected,
+            "empty lists require an expected list type",
+        )),
+        Expr::Interp(_) => Err(Error::with_code(
+            ErrorCode::TypeBadInterpolation,
+            "cannot interpolate value",
+        )),
+        Expr::String(_) => eval(expr, env, aliases),
+        Expr::Binary(op, left, right) if op == "++" => {
+            let left = synth_expr(left, env, aliases)?;
+            let right = synth_expr(right, env, aliases)?;
+            match (left, right) {
+                (Value::String(left), Value::String(right)) => Ok(Value::String(left + &right)),
+                _ => Err(Error::with_code(
+                    ErrorCode::TypeBadInterpolation,
+                    "cannot interpolate value",
+                )),
+            }
+        }
+        Expr::Apply(function, arg) if is_show(function) => {
+            let value = synth_expr(arg, env, aliases)?;
+            match value {
+                Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::String(_) => {
+                    eval(expr, env, aliases)
+                }
+                _ => Err(Error::with_code(
+                    ErrorCode::TypeBadInterpolation,
+                    "cannot interpolate value",
+                )),
+            }
         }
         expr => eval(expr, env, aliases),
     }
+}
+
+fn is_show(expr: &Expr) -> bool {
+    matches!(expr, Expr::Var(name) if name == "show")
 }
 
 pub fn check_value_against(
@@ -86,7 +137,14 @@ pub fn check_value_against(
     match &expected {
         Type::Refinement { binder, base, pred } => {
             let value = check_value_against(value, base, env, aliases)?;
-            validate_refinement(value, binder, pred, env, aliases)
+            validate_refinement_with_code(
+                value,
+                binder,
+                pred,
+                env,
+                aliases,
+                refinement_error_code(binder, base),
+            )
         }
         Type::Record(fields) => {
             let Value::Record(values) = value else {
@@ -94,7 +152,10 @@ pub fn check_value_against(
             };
             for name in values.keys() {
                 if !fields.contains_key(name) {
-                    return Err(Error::new(format!("unknown field `{name}`")));
+                    return Err(Error::with_code(
+                        ErrorCode::RecordUnknownField,
+                        format!("unknown field `{name}`"),
+                    ));
                 }
             }
             let mut out = BTreeMap::new();
@@ -104,7 +165,10 @@ pub fn check_value_against(
                         out.insert(name.clone(), Value::None);
                         continue;
                     }
-                    return Err(Error::new(format!("missing field `{name}`")));
+                    return Err(Error::with_code(
+                        ErrorCode::RecordMissingField,
+                        format!("missing field `{name}`"),
+                    ));
                 };
                 out.insert(
                     name.clone(),
@@ -123,10 +187,21 @@ pub fn check_value_against(
             )?))),
         },
         _ if matches_type(&value, &expected, aliases)? => Ok(value),
-        _ => Err(Error::new(format!(
-            "type mismatch: expected {}, got {}",
-            type_name(&expected),
-            value_name(&value)
-        ))),
+        _ => Err(Error::with_code(
+            ErrorCode::TypeMismatch,
+            format!(
+                "type mismatch: expected {}, got {}",
+                type_name(&expected),
+                value_name(&value)
+            ),
+        )),
+    }
+}
+
+fn refinement_error_code(binder: &str, base: &Type) -> ErrorCode {
+    if binder == "x" && matches!(base, Type::String) {
+        ErrorCode::RefineLiteralUnion
+    } else {
+        ErrorCode::RefineFailed
     }
 }

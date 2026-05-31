@@ -1,6 +1,6 @@
 use serde_json::{Map, Number, Value as JsonValue};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorCode, Result};
 use crate::eval::Value;
 
 pub fn emit_json(value: &Value, pretty: bool) -> Result<String> {
@@ -38,7 +38,10 @@ fn to_json(value: &Value) -> Result<JsonValue> {
             JsonValue::Object(object)
         }
         Value::Closure { .. } | Value::Native(_) => {
-            return Err(Error::new("function escaped into output"));
+            return Err(Error::with_code(
+                ErrorCode::OutputFunction,
+                "function escaped into output",
+            ));
         }
     })
 }

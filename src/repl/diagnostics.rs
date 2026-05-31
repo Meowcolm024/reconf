@@ -1,6 +1,12 @@
 use crate::Error;
 
 pub fn attach_best_effort_span(error: Error, name: &str, source: &str) -> Error {
+    if error.message().contains("empty interpolation")
+        && let Some(span) = find_empty_interpolation(source)
+    {
+        return error.with_source_span(name, source, span, "empty interpolation");
+    }
+
     if let Some(type_name) = unknown_type_name(error.message()).map(str::to_string)
         && let Some(span) = find_word(source, &type_name)
     {
@@ -14,6 +20,10 @@ pub fn attach_best_effort_span(error: Error, name: &str, source: &str) -> Error 
     }
 
     error
+}
+
+fn find_empty_interpolation(source: &str) -> Option<std::ops::Range<usize>> {
+    source.find("{}").map(|start| start..start + 2)
 }
 
 fn unknown_type_name(message: &str) -> Option<&str> {
