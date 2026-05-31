@@ -72,7 +72,30 @@ fn render_error(error: &Error) -> String {
 }
 
 fn normalize_diagnostic(output: &str) -> String {
-    output.replace(env!("CARGO_MANIFEST_DIR"), "$RECONF")
+    strip_ansi(output).replace(env!("CARGO_MANIFEST_DIR"), "$RECONF")
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            out.push(ch);
+            continue;
+        }
+
+        if chars.next_if_eq(&'[').is_none() {
+            out.push(ch);
+            continue;
+        }
+
+        for ch in chars.by_ref() {
+            if ch.is_ascii_alphabetic() {
+                break;
+            }
+        }
+    }
+    out
 }
 
 fn expected_code(path: &Path) -> String {
