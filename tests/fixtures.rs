@@ -9,6 +9,10 @@ fn fixture_root() -> PathBuf {
         .join("fixtures")
 }
 
+fn examples_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("examples")
+}
+
 fn collect_expected_files(dir: &Path, extension: &str, files: &mut Vec<PathBuf>) {
     for entry in fs::read_dir(dir).expect("fixture directory should be readable") {
         let entry = entry.expect("fixture entry should be readable");
@@ -54,6 +58,39 @@ fn eval_fixtures_match_json() {
             );
         });
         let actual = emit_json(&value, true).expect("fixture output should be JSON data");
+        let expected = fs::read_to_string(&expected_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", expected_path.display()));
+        assert_eq!(
+            actual.trim_end(),
+            expected.trim_end(),
+            "{}",
+            source_path.display()
+        );
+    }
+}
+
+#[test]
+fn examples_match_json() {
+    let mut expected_files = Vec::new();
+    collect_expected_files(&examples_root(), "json", &mut expected_files);
+    expected_files.sort();
+
+    assert!(
+        !expected_files.is_empty(),
+        "expected at least one runnable example"
+    );
+
+    for expected_path in expected_files {
+        let source_path = source_for_expected(&expected_path);
+        let mut compiler = Compiler::new();
+        let value = compiler.eval_file(&source_path).unwrap_or_else(|err| {
+            panic!(
+                "{} failed:\n{}",
+                source_path.display(),
+                compiler.render(err)
+            );
+        });
+        let actual = emit_json(&value, true).expect("example output should be JSON data");
         let expected = fs::read_to_string(&expected_path)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", expected_path.display()));
         assert_eq!(

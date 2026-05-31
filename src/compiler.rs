@@ -895,6 +895,17 @@ impl Compiler {
                     span,
                 },
             )),
+            ("all" | "any", TyKind::List(item))
+                if self.compatible(item, &bool_ty(span), _ctx)? =>
+            {
+                Ok((
+                    bool_ty(span),
+                    Expr {
+                        kind: ExprKind::Field(base_expr, name.to_string()),
+                        span,
+                    },
+                ))
+            }
             ("contains", TyKind::List(item)) => Ok((
                 Ty {
                     kind: TyKind::Fun(item.clone(), Box::new(bool_ty(span))),
@@ -950,6 +961,11 @@ impl Compiler {
             ("show", ty) if is_showable_kind(ty) => string_ty(span),
             ("isSome" | "isNone", TyKind::Option(_)) => bool_ty(span),
             ("length", TyKind::List(_) | TyKind::String) => int_ty(span),
+            ("all" | "any", TyKind::List(item))
+                if self.compatible(item, &bool_ty(span), ctx)? =>
+            {
+                bool_ty(span)
+            }
             ("contains", TyKind::List(item)) => Ty {
                 kind: TyKind::Fun(item.clone(), Box::new(bool_ty(span))),
                 span,
@@ -1220,6 +1236,8 @@ fn is_builtin_name(name: &str) -> bool {
             | "isSome"
             | "isNone"
             | "length"
+            | "all"
+            | "any"
             | "contains"
             | "startsWith"
             | "endsWith"

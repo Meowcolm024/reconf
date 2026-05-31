@@ -34,6 +34,8 @@ fn is_builtin_name(name: &str) -> bool {
             | "isSome"
             | "isNone"
             | "length"
+            | "all"
+            | "any"
             | "contains"
             | "startsWith"
             | "endsWith"
@@ -205,6 +207,26 @@ fn eval_method(name: &str, receiver: Value, span: Span) -> Result<Value, Diagnos
                 span,
             )),
         },
+        "all" => match receiver {
+            Value::List(items) => Ok(Value::Bool(
+                items.iter().all(|item| matches!(item, Value::Bool(true))),
+            )),
+            other => Err(Diagnostic::new(
+                "E_RUNTIME_022",
+                format!("all is not supported on `{}`", value_debug(&other)),
+                span,
+            )),
+        },
+        "any" => match receiver {
+            Value::List(items) => Ok(Value::Bool(
+                items.iter().any(|item| matches!(item, Value::Bool(true))),
+            )),
+            other => Err(Diagnostic::new(
+                "E_RUNTIME_023",
+                format!("any is not supported on `{}`", value_debug(&other)),
+                span,
+            )),
+        },
         "contains" | "startsWith" | "endsWith" | "unwrapOr" => Ok(Value::Builtin {
             name: name.to_string(),
             args: vec![receiver],
@@ -238,7 +260,7 @@ fn apply_value(func: Value, arg: Value, span: Span) -> Result<Value, Diagnostic>
 
 fn apply_builtin(name: String, args: Vec<Value>, span: Span) -> Result<Value, Diagnostic> {
     let arity = match name.as_str() {
-        "show" | "isSome" | "isNone" | "length" => 1,
+        "show" | "isSome" | "isNone" | "length" | "all" | "any" => 1,
         "contains" | "startsWith" | "endsWith" | "unwrapOr" => 2,
         _ => {
             return Err(Diagnostic::new(
@@ -261,6 +283,26 @@ fn apply_builtin(name: String, args: Vec<Value>, span: Span) -> Result<Value, Di
             other => Err(Diagnostic::new(
                 "E_RUNTIME_011",
                 format!("length is not supported on `{}`", value_debug(other)),
+                span,
+            )),
+        },
+        "all" => match &args[0] {
+            Value::List(items) => Ok(Value::Bool(
+                items.iter().all(|item| matches!(item, Value::Bool(true))),
+            )),
+            other => Err(Diagnostic::new(
+                "E_RUNTIME_024",
+                format!("all is not supported on `{}`", value_debug(other)),
+                span,
+            )),
+        },
+        "any" => match &args[0] {
+            Value::List(items) => Ok(Value::Bool(
+                items.iter().any(|item| matches!(item, Value::Bool(true))),
+            )),
+            other => Err(Diagnostic::new(
+                "E_RUNTIME_025",
+                format!("any is not supported on `{}`", value_debug(other)),
                 span,
             )),
         },

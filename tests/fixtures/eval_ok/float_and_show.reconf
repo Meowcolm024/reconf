@@ -1,0 +1,11 @@
+type Config = {
+  ratio : Float,
+  rendered : String,
+};
+
+let config = {
+  ratio = 3.0 / 2.0,
+  rendered = show true ++ ":" ++ show 42,
+} : Config;
+
+config
