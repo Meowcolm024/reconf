@@ -4,6 +4,7 @@ mod diagnostic;
 mod emit;
 mod eval;
 mod syntax;
+mod typeck;
 
 pub use cli::cli_main;
 pub use compiler::Compiler;
