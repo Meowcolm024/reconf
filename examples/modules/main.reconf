@@ -1,0 +1,15 @@
+import "./lib.reconf": BaseConfig, default_config;
+
+type Config = {
+  dir : String,
+  retries : Int,
+  ready : Bool,
+};
+
+let config = {
+  dir = default_config.dir,
+  retries = default_config.retries,
+  ready = [true, true].all,
+} : Config;
+
+config

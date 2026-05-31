@@ -1,0 +1,5 @@
+error[E_REFINE_004]: refinement failed
+  --> $FIXTURES/refine_err/bad_port.reconf:3:11
+   3 | let bad = 80 : Port;
+     |           ^^
+     = note: value `80` does not satisfy { x : Int | ... }

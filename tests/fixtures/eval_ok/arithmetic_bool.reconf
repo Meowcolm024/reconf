@@ -1,0 +1,13 @@
+type Config = {
+  port : Int,
+  ok : Bool,
+  msg : String,
+};
+
+let config = {
+  port = 8000 + 80,
+  ok = 3 * 4 == 12 && !"abc".contains "z",
+  msg = "re" ++ "conf",
+} : Config;
+
+config

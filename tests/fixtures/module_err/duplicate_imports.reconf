@@ -1,0 +1,4 @@
+import "../eval_ok/module_lib.reconf": default_config;
+import "../eval_ok/module_lib.reconf": default_config;
+
+default_config

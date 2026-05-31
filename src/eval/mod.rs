@@ -168,6 +168,9 @@ fn binary(op: &str, a: Value, b: Value) -> Result<Value> {
         ("+", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
         ("-", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
         ("*", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a * b)),
+        ("/", Value::Int(_), Value::Int(0)) | ("%", Value::Int(_), Value::Int(0)) => {
+            Err(Error::new("division by zero"))
+        }
         ("/", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a / b)),
         ("%", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a % b)),
         ("+", Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),

@@ -66,6 +66,16 @@ pub fn check_expr(
     }
 }
 
+pub fn synth_expr(expr: &Expr, env: &Env, aliases: &BTreeMap<String, Type>) -> Result<Value> {
+    match expr {
+        Expr::None => Err(Error::new("`none` requires an expected option type")),
+        Expr::List(items) if items.is_empty() => {
+            Err(Error::new("empty lists require an expected list type"))
+        }
+        expr => eval(expr, env, aliases),
+    }
+}
+
 pub fn check_value_against(
     value: Value,
     expected: &Type,

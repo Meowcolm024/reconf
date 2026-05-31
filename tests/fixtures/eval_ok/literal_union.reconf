@@ -1,0 +1,5 @@
+type AddrTy = "localhost" | "fixed";
+
+let local = "localhost" : AddrTy;
+
+local

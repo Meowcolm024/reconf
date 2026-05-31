@@ -12,5 +12,6 @@ pub mod source;
 pub mod syntax;
 pub mod typeck;
 
+pub use emit::json::emit_json;
 pub use error::{Error, Result};
 pub use resolve::modules::run;

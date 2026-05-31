@@ -6,11 +6,11 @@ use std::rc::Rc;
 use crate::error::{Error, Result};
 use crate::eval::builtins::{self, NativeFunction};
 use crate::eval::prelude;
-use crate::eval::{Value, contains_function, emit, eval};
+use crate::eval::{Value, contains_function, emit};
 use crate::lower::lower_file;
 use crate::syntax::parser::parse;
 use crate::syntax::surface::{Decl, FileAst, Type};
-use crate::typeck::bidir::check_expr;
+use crate::typeck::bidir::{check_expr, synth_expr};
 use crate::typeck::wf::well_formed_type;
 
 #[derive(Clone, Default)]
@@ -128,7 +128,7 @@ fn eval_file_inner(
                     well_formed_type(&ty, &module.types)?;
                     check_expr(&expr, &ty, &env, &module.types)?
                 } else {
-                    eval(&expr, &env, &module.types)?
+                    synth_expr(&expr, &env, &module.types)?
                 };
                 module.values.insert(name.clone(), value.clone());
                 if export {
@@ -139,7 +139,7 @@ fn eval_file_inner(
     }
 
     let env = Rc::new(module.values.clone());
-    let output = eval(&ast.output, &env, &module.types)?;
+    let output = synth_expr(&ast.output, &env, &module.types)?;
     if contains_function(&output) {
         return Err(Error::new("function escaped into output"));
     }

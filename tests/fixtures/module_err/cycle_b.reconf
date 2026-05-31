@@ -1,0 +1,5 @@
+import "./cycle_a.reconf": a;
+
+export let b = 2;
+
+b

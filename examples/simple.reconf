@@ -1,0 +1,14 @@
+type Port = { x : Int | x > 1024 && x < 65535 };
+
+type Config = {
+  port : Port,
+  host : String?,
+  message : String,
+};
+
+let config = {
+  port = 8080,
+  message = "list length: {length [1, 2, 3]}",
+} : Config;
+
+config

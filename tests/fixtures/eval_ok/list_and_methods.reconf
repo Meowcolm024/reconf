@@ -1,0 +1,17 @@
+type Config = {
+  has_two : Bool,
+  count : Int,
+  prefix : Bool,
+  fallback : String,
+};
+
+let maybe : String? = none;
+
+let config = {
+  has_two = [1, 2, 3].contains 2,
+  count = [1, 2, 3].length,
+  prefix = "reconf".startsWith "re",
+  fallback = maybe.unwrapOr "default",
+} : Config;
+
+config

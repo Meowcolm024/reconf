@@ -45,10 +45,8 @@ pub fn declared(name: &str) -> bool {
 
 fn arity(name: &str) -> Result<usize> {
     match name {
-        "show" | "length" | "isSome" | "isNone" => Ok(1),
-        "contains" | "startsWith" | "endsWith" | "unwrapOr" | "all" | "any" | "map" | "filter" => {
-            Ok(2)
-        }
+        "show" | "length" | "isSome" | "isNone" | "all" | "any" => Ok(1),
+        "contains" | "startsWith" | "endsWith" | "unwrapOr" | "map" | "filter" => Ok(2),
         _ => Err(Error::new(format!("unknown native `{name}`"))),
     }
 }
@@ -79,6 +77,20 @@ fn call(name: &str, args: Vec<Value>) -> Result<Value> {
         ("endsWith", [Value::String(value), Value::String(suffix)]) => {
             Ok(Value::Bool(value.ends_with(suffix)))
         }
+        ("all", [Value::List(items)]) => items
+            .iter()
+            .try_fold(true, |acc, item| match item {
+                Value::Bool(value) => Ok(acc && *value),
+                _ => Err(Error::new("type mismatch: all expects [Bool]")),
+            })
+            .map(Value::Bool),
+        ("any", [Value::List(items)]) => items
+            .iter()
+            .try_fold(false, |acc, item| match item {
+                Value::Bool(value) => Ok(acc || *value),
+                _ => Err(Error::new("type mismatch: any expects [Bool]")),
+            })
+            .map(Value::Bool),
         ("map", [Value::List(items), function]) => {
             let mapped = items
                 .iter()

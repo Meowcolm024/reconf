@@ -1,0 +1,4 @@
+error[E_RUNTIME_016]: division by zero
+  --> $FIXTURES/runtime_err/division_by_zero.reconf:1:11
+   1 | let bad = 1 / 0;
+     |           ^^^^^
