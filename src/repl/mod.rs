@@ -1,5 +1,8 @@
 use std::io::{self, BufRead, IsTerminal};
 
+use reedline::{ValidationResult, Validator};
+
+pub mod diagnostics;
 mod eval;
 pub mod highlighter;
 mod prompt;
@@ -28,16 +31,31 @@ pub fn run() -> Result<()> {
 
 fn run_piped() -> Result<()> {
     let mut evaluator = eval::ReplEvaluator::new(semantic::SemanticState::default());
+    let validator = validator::ReconfValidator;
+    let mut buffer = String::new();
     for line in io::stdin().lock().lines() {
         let line = line.map_err(|error| Error::new(format!("repl error: {error}")))?;
         let line = line.trim();
-        if line.is_empty() {
+        if buffer.is_empty() && line.is_empty() {
             continue;
         }
-        if matches!(line, ":quit" | ":q" | "quit" | "exit") {
+        if buffer.is_empty() && matches!(line, ":quit" | ":q" | "quit" | "exit") {
             break;
         }
-        match evaluator.eval(line) {
+
+        if !buffer.is_empty() {
+            buffer.push('\n');
+        }
+        buffer.push_str(line);
+
+        if !matches!(validator.validate(&buffer), ValidationResult::Complete) {
+            continue;
+        }
+
+        let input = std::mem::take(&mut buffer);
+        let trimmed = input.trim();
+        match evaluator.eval(trimmed) {
+            Ok(output) if trimmed.ends_with(';') && output == "0" => println!(),
             Ok(output) => println!("{output}"),
             Err(error) => eprintln!("{:?}", miette::Report::new(error)),
         }

@@ -86,3 +86,17 @@ fn repl_evaluator_keeps_successful_declarations() {
     assert_eq!(evaluator.eval("let p : Port = 8080;").unwrap(), "0");
     assert_eq!(evaluator.eval("p").unwrap(), "8080");
 }
+
+#[test]
+fn repl_errors_carry_source_labels() {
+    let mut evaluator = ReplEvaluator::new(SemanticState::default());
+
+    let error = evaluator
+        .eval("let config = { port = 8080 } : { port : Port };")
+        .unwrap_err();
+    let report = format!("{:?}", miette::Report::new(error));
+
+    assert!(report.contains("unknown type `Port`"));
+    assert!(report.contains("let config"));
+    assert!(report.contains("Port"));
+}

@@ -9,7 +9,7 @@ pub struct ReconfPrompt(DefaultPrompt);
 impl ReconfPrompt {
     pub fn new(counter: usize) -> Self {
         Self(DefaultPrompt {
-            left_prompt: DefaultPromptSegment::Basic(" reconf ".into()),
+            left_prompt: DefaultPromptSegment::Basic("reconf ".into()),
             right_prompt: DefaultPromptSegment::Basic(format!(" -<{counter}>- ")),
         })
     }

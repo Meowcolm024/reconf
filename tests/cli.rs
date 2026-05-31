@@ -55,7 +55,10 @@ fn check_rejects_bad_refinement_with_miette_report() {
         .unwrap();
 
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("refinement failed"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refinement failed"));
+    assert!(stderr.contains("80 : Port"));
+    assert!(stderr.contains("value does not satisfy refinement"));
 }
 
 fn tempfile_dir() -> std::path::PathBuf {

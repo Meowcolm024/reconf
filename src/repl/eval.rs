@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::Result;
 use crate::eval::emit;
 use crate::lower::lower_file;
+use crate::repl::diagnostics::attach_best_effort_span;
 use crate::repl::semantic::SemanticState;
 use crate::resolve::modules::{Loader, eval_file};
 use crate::syntax::parser::parse;
@@ -22,10 +23,12 @@ impl ReplEvaluator {
 
     pub fn eval(&mut self, src: &str) -> Result<String> {
         let source = self.source_with(src);
-        let parsed = parse(&source)?;
+        let parsed =
+            parse(&source).map_err(|error| attach_best_effort_span(error, "repl", &source))?;
         let ast = lower_file(parsed.clone());
         let mut loader = Loader::default();
-        let module = eval_file(&mut loader, Path::new("."), ast)?;
+        let module = eval_file(&mut loader, Path::new("."), ast)
+            .map_err(|error| attach_best_effort_span(error, "repl", &source))?;
         self.semantics.learn_file(&parsed);
         if src.ends_with(';') {
             self.source.push_str(src);

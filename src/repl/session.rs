@@ -65,6 +65,7 @@ impl ReconfRepl {
                     }
                     self.counter += 1;
                     match self.evaluator.eval(line) {
+                        Ok(output) if line.ends_with(';') && output == "0" => println!(),
                         Ok(output) => println!("{output}"),
                         Err(error) => eprintln!("{:?}", miette::Report::new(error)),
                     }
