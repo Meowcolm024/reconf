@@ -563,15 +563,19 @@ source provider
   -> parse existing surface syntax
   -> resolve modules and names
   -> lower surface to core
-  -> type-check and elaborate core
+  -> bidirectionally shape-check and elaborate core
   -> normalize/evaluate elaborated core
-  -> validate refinements
-  -> validate data-only output
+  -> validate refinements on normalized values
+  -> validate data-only output at the output boundary
   -> emit output
 ```
 
 The important refactor is the phase separation after parsing. Each phase should
 consume the previous phase's output and produce a well-defined result.
+
+This order intentionally follows the language design: ordinary shape checking
+comes before refinement validation, and refinement predicates are checked and
+validated as concrete normalized computations rather than solved symbolically.
 
 ## Dependency Direction
 
@@ -698,7 +702,7 @@ Purpose:
 
 - Carry checked expression/type relationships.
 - Make contextual rewrites explicit.
-- Provide evaluator input.
+- Provide evaluator input for ordinary normalization.
 
 Must make explicit:
 
@@ -707,6 +711,12 @@ Must make explicit:
 - Checked record field order.
 - Expanded or resolved aliases where needed.
 - Native and user binding types.
+
+Should not:
+
+- Treat refinement predicates as SMT constraints.
+- Validate refinement predicates during ordinary shape checking.
+- Invent refined types during synthesis.
 
 Suggested artifacts:
 
@@ -1088,6 +1098,8 @@ Target:
 - Return typed/elaborated core.
 - Make contextual elaboration explicit.
 - Separate shape checking from normalization/refinement validation.
+- Check refinement predicates for ordinary shape, including `Bool` predicate
+  type, but leave predicate truth validation to the refinement phase.
 - Produce structured diagnostics with spans.
 
 Potential split:
@@ -1187,7 +1199,7 @@ Current:
 Target:
 
 - Validate core predicate expressions after normalization.
-- Receive typed/core predicate and normalized value.
+- Receive checked core predicate metadata and normalized value.
 - Return structured refinement diagnostics.
 - Keep concrete evaluation semantics.
 
@@ -1591,6 +1603,8 @@ Tasks:
 - Make omitted option fields explicit.
 - Keep closed-record behavior.
 - Keep refinement shape checks.
+- Check refinement predicates have type `Bool`, but do not validate predicate
+  truth in this stage.
 
 Exit criteria:
 
