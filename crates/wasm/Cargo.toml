@@ -1,0 +1,7 @@
+[package]
+name = "reconf-wasm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reconf-compiler.workspace = true

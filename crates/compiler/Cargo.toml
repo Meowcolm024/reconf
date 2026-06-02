@@ -1,0 +1,12 @@
+[package]
+name = "reconf-compiler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reconf-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+miette.workspace = true

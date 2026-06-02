@@ -1,0 +1,78 @@
+file = { SOI ~ decl* ~ expr? ~ EOI }
+
+decl = _{ import_decl | export_native_decl | export_type_decl | export_let_decl | native_decl | type_decl | top_let_decl }
+import_decl = { "import" ~ string_lit ~ ":" ~ name ~ ("," ~ name)* ~ ";" }
+export_native_decl = { "export" ~ native_decl }
+export_type_decl = { "export" ~ type_decl }
+export_let_decl = { "export" ~ top_let_decl }
+native_decl = { "native" ~ "let" ~ ident ~ ":" ~ ty ~ ";" }
+type_decl = { "type" ~ type_name ~ "=" ~ ty ~ ";" }
+top_let_decl = { "let" ~ ident ~ (":" ~ ty)? ~ "=" ~ expr ~ ";" }
+
+ty = { fun_ty }
+fun_ty = { postfix_ty ~ ("->" ~ fun_ty)? }
+postfix_ty = { primary_ty ~ "?"? }
+primary_ty = _{ base_ty | list_ty | record_or_refinement_ty | literal_union_ty | type_alias | paren_ty }
+base_ty = { "Int" | "Float" | "Bool" | "String" }
+type_alias = { type_name }
+list_ty = { "[" ~ ty ~ "]" }
+record_or_refinement_ty = { "{" ~ (refinement_body | record_fields?) ~ "}" }
+record_fields = { field_ty ~ ("," ~ field_ty)* ~ ","? }
+field_ty = { ident ~ ":" ~ ty }
+refinement_body = { ident ~ ":" ~ ty ~ "|" ~ expr }
+literal_union_ty = { string_lit ~ ("|" ~ string_lit)+ }
+paren_ty = { "(" ~ ty ~ ")" }
+
+expr = { let_expr | ascription_expr }
+let_expr = { "let" ~ ident ~ (":" ~ ty)? ~ "=" ~ expr ~ "in" ~ expr }
+ascription_expr = { plain_expr ~ (":" ~ ty)? }
+plain_expr = _{ lambda_expr | if_expr | logic_or }
+lambda_expr = { "(" ~ ident ~ ":" ~ ty ~ ")" ~ "=>" ~ expr }
+if_expr = { "if" ~ expr ~ "then" ~ expr ~ "else" ~ expr }
+
+logic_or = { logic_and ~ (or_op ~ logic_and)* }
+logic_and = { equality ~ (and_op ~ equality)* }
+equality = { relation ~ (eq_op ~ relation)* }
+relation = { additive ~ (rel_op ~ additive)* }
+additive = { multiplicative ~ (add_op ~ multiplicative)* }
+multiplicative = { unary ~ (mul_op ~ unary)* }
+unary = { unary_op* ~ application }
+application = { postfix ~ postfix* }
+postfix = { primary ~ (field_access | method_call)* }
+field_access = { "." ~ ident }
+method_call = { "." ~ ident ~ postfix+ }
+
+primary = _{ literal | option_expr | ident_expr | list_expr | record_expr | paren_expr }
+option_expr = { none_expr | some_expr }
+none_expr = { "none" }
+some_expr = { "some" ~ unary }
+ident_expr = { ident }
+list_expr = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]" }
+record_expr = { "{" ~ (field_expr ~ ("," ~ field_expr)* ~ ","?)? ~ "}" }
+field_expr = { ident ~ "=" ~ expr }
+paren_expr = { "(" ~ expr ~ ")" }
+
+literal = _{ float_lit | int_lit | bool_lit | string_lit }
+bool_lit = { "true" | "false" }
+int_lit = @{ "-"? ~ ASCII_DIGIT+ }
+float_lit = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+string_lit = @{ "\"" ~ (escaped_char | (!"\"" ~ ANY))* ~ "\"" }
+escaped_char = { "\\" ~ ANY }
+
+or_op = { "||" }
+and_op = { "&&" }
+eq_op = { "==" | "!=" }
+rel_op = { "<=" | "<" | ">=" | ">" }
+add_op = { "++" | "+" | "-" }
+mul_op = { "*" | "/" | "%" }
+unary_op = { "!" | "-" }
+
+name = _{ ident | type_name }
+ident = @{ !keyword ~ (lower | "_") ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
+type_name = @{ !keyword ~ upper ~ (ASCII_ALPHANUMERIC | "_" | "-")* }
+keyword = { "import" | "export" | "native" | "type" | "let" | "in" | "if" | "then" | "else" | "true" | "false" | "none" | "some" }
+lower = _{ 'a'..'z' }
+upper = _{ 'A'..'Z' }
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "#" ~ (!"\n" ~ ANY)* }
