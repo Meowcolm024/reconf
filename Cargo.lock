@@ -774,19 +774,44 @@ dependencies = [
 ]
 
 [[package]]
-name = "reconf"
+name = "reconf-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
  "miette",
  "nu-ansi-term",
- "pest",
- "pest_derive",
+ "reconf-compiler",
+ "reconf-core",
  "reedline",
- "serde",
  "serde_json",
  "syntect",
+]
+
+[[package]]
+name = "reconf-compiler"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "reconf-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "reconf-core"
+version = "0.1.0"
+dependencies = [
+ "miette",
+ "pest",
+ "pest_derive",
  "thiserror",
+]
+
+[[package]]
+name = "reconf-wasm"
+version = "0.1.0"
+dependencies = [
+ "reconf-compiler",
 ]
 
 [[package]]

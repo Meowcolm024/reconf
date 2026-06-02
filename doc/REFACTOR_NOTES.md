@@ -12,47 +12,46 @@ clear ownership boundaries.
 
 ## Current Baseline
 
-The repository currently contains a working single-crate MVP:
+The repository is now a Cargo workspace:
 
-- `src/syntax/`
-  - Pest grammar and parser.
-  - Surface AST in `surface.rs`.
-- `src/lower/`
-  - Syntax-directed lowering for interpolation and recursive AST traversal.
-  - Currently returns another `FileAst`, not a separate core representation.
-- `src/resolve/`
-  - Module loading.
-  - Import/export validation.
-  - Cycle detection.
-  - Prelude insertion.
-  - Calls type checking/evaluation as part of module evaluation.
-- `src/typeck/`
-  - Bidirectional checking entry points.
-  - Shape validation, contextual option behavior, record checks, alias
-    expansion, and refinement checks.
+- `crates/core/`
+  - Source infrastructure, diagnostics, syntax/surface AST, resolved
+    artifacts, core AST, lowering, elaboration/type checking,
+    evaluation/normalization, refinement validation, native registry, and the
+    bundled prelude source.
+- `crates/compiler/`
+  - Compiler pipeline/session orchestration, module loading/evaluation policy,
+    prelude compilation, output validation, and data emitters.
+- `crates/cli/`
+  - Binary entrypoint, CLI argument parsing, REPL UI, terminal reporter setup,
+    and host-facing filesystem wiring.
+- `crates/wasm/`
+  - Minimal placeholder crate for target-specific bindings in the separate WASM
+    branch.
+- `tests/` and `examples/`
+  - Shared fixture corpus consumed by crate-local integration tests.
   - Currently returns runtime `Value`.
-- `src/eval/`
+- `crates/core/src/eval/`
   - Runtime `Value`.
   - Big-step evaluation over surface expressions.
   - Native builtin registry and native application.
   - Prelude loading.
   - ReConf-style value printing.
-- `src/refine/`
+- `crates/core/src/refine/`
   - Concrete refinement validation by evaluating predicates.
-- `src/emit/`
-  - JSON output.
-- `src/diagnostic.rs` and `src/error.rs`
+- `crates/compiler/src/emit/`
+  - Data-only JSON and ReConf output.
+- `crates/core/src/diagnostic.rs` and `crates/core/src/error.rs`
   - Error codes, miette integration, and best-effort source-span attachment.
-- `src/cli.rs`
+- `crates/cli/src/cli.rs`
   - CLI command parsing.
-  - File loading.
-  - Parse/lower/eval orchestration.
+  - Filesystem-backed compiler invocation.
   - Emitter selection.
-- `src/repl/`
+- `crates/cli/src/repl/`
   - Reedline UI.
   - Syntax highlighting.
   - Input validation.
-  - Accumulated-source evaluation.
+  - Compiler-session evaluation.
   - Diagnostic reporting setup.
 - `tests/`
   - Fixture harness.
@@ -153,13 +152,13 @@ Each representation should have a clear owner and a clear set of consumers.
 
 Current code:
 
-- `src/syntax/surface.rs` defines `FileAst`, `Decl`, `Type`, `Expr`, and
+- `crates/core/src/syntax/surface.rs` defines `FileAst`, `Decl`, `Type`, `Expr`, and
   `StrPart`.
-- `src/syntax/parser.rs` converts Pest pairs into this unspanned surface AST.
-- `src/lower/desugar.rs` lowers `FileAst` into core syntax.
+- `crates/core/src/syntax/parser.rs` converts Pest pairs into this unspanned surface AST.
+- `crates/core/src/lower/desugar.rs` lowers `FileAst` into core syntax.
 - Type checking, normalization, and refinement validation now operate on core
   syntax.
-- `src/repl/semantic.rs` walks `FileAst` for semantic highlighting.
+- `crates/cli/src/repl/semantic.rs` walks `FileAst` for semantic highlighting.
 
 Problem:
 
@@ -271,9 +270,9 @@ Refactor direction:
 
 Current code:
 
-- `src/compiler.rs` exposes `Compiler`, `CompilerOptions`, `CompileInput`,
+- `crates/compiler/src/compiler.rs` exposes `Compiler`, `CompilerOptions`, `CompileInput`,
   `CheckOutput`, and `EvalOutput`.
-- `src/compiler/pipeline.rs` owns shared parse/lower/entry-compile
+- `crates/compiler/src/compiler/pipeline.rs` owns shared parse/lower/entry-compile
   orchestration for `Compiler` and `CompilerSession`.
 - CLI and integration tests call `Compiler::check` or `Compiler::eval`, while
   REPL evaluation calls `CompilerSession`; none of these callers reconstruct
@@ -388,8 +387,8 @@ reasonable MVP shortcuts, but they are the places the refactor should unwind.
 Files:
 
 - Old location: `src/resolve/modules.rs`
-- Current transition location: `src/compiler/loader.rs`, `src/compiler/module.rs`,
-  and `src/compiler/module/`
+- Current transition location: `crates/compiler/src/compiler/loader.rs`, `crates/compiler/src/compiler/module.rs`,
+  and `crates/compiler/src/compiler/module/`
 
 Current violation:
 
@@ -449,7 +448,7 @@ Current violation:
   elaboration, while
   `ModuleDeclEvaluator` evaluates elaborated declarations/output and builds
   module-owned exports.
-- `src/compiler/module/` now separates module state, import binding, and module
+- `crates/compiler/src/compiler/module/` now separates module state, import binding, and module
   evaluation into `state.rs`, `imports.rs`, and `eval.rs`; `module.rs` is the
   narrow facade for public module-facing names.
 
@@ -487,10 +486,10 @@ Target:
 
 Files:
 
-- `src/cli.rs`
-- `src/repl/eval.rs`
-- `tests/fixtures.rs`
-- `tests/determinism.rs`
+- `crates/cli/src/cli.rs`
+- `crates/cli/src/repl/eval.rs`
+- `crates/compiler/tests/fixtures.rs`
+- `crates/compiler/tests/determinism.rs`
 
 Current violation:
 
@@ -551,7 +550,7 @@ Target:
 
 Files:
 
-- `src/eval/mod.rs`
+- `crates/core/src/eval/mod.rs`
 
 Current violation:
 
@@ -583,10 +582,10 @@ Target:
 
 Files:
 
-- `src/syntax/surface.rs`
-- `src/lower/desugar.rs`
-- `src/core/ast.rs`
-- Removed `src/core/pretty.rs`
+- `crates/core/src/syntax/surface.rs`
+- `crates/core/src/lower/desugar.rs`
+- `crates/core/src/core/ast.rs`
+- Removed `crates/core/src/core/pretty.rs`
 
 Current violation:
 
@@ -615,9 +614,9 @@ Target:
 
 Files:
 
-- `src/diagnostic.rs`
-- `src/syntax/parser.rs`
-- `src/error.rs`
+- `crates/core/src/diagnostic.rs`
+- `crates/core/src/syntax/parser.rs`
+- `crates/core/src/error.rs`
 
 Current violation:
 
@@ -669,9 +668,9 @@ Target:
 
 Files:
 
-- `src/eval/builtins.rs`
-- `src/compiler/prelude.rs`
-- `src/eval/prelude.reconf`
+- `crates/core/src/eval/builtins.rs`
+- `crates/compiler/src/compiler/prelude.rs`
+- `crates/core/src/eval/prelude.reconf`
 
 Current violation:
 
@@ -706,9 +705,9 @@ Target:
 
 Files:
 
-- `src/emit/json.rs`
-- `src/eval/mod.rs`
-- `src/compiler.rs`
+- `crates/compiler/src/emit/json.rs`
+- `crates/core/src/eval/mod.rs`
+- `crates/compiler/src/compiler.rs`
 
 Current violation:
 
@@ -1189,10 +1188,10 @@ Target layout:
 ```text
 Cargo.toml
 crates/
-  reconf-core/
-  reconf-compiler/
-  reconf-cli/
-  reconf-wasm/
+  core/       # package: reconf-core
+  compiler/   # package: reconf-compiler
+  cli/        # package: reconf-cli
+  wasm/       # package: reconf-wasm
 tests/
 examples/
 doc/
@@ -1294,32 +1293,30 @@ Future responsibilities:
 
 ## Module-Level Refactor Plan
 
-### `src/lib.rs`
+### Workspace Crate Roots
 
 Current:
 
-- Still exposes the single-crate module tree while the crate split is delayed.
-- Several leaf implementation modules are now private behind module facades:
-  `core::{...}`, `emit::{DataValue, EmitterRegistry, OutputFormat}`,
-  `lower::SurfaceToCoreLowerer`, and `typeck::{CoreElaborator,
-  CoreModuleElaborator}`.
-- The root re-exports only the currently useful emitter facade types and common
-  error aliases instead of re-exporting concrete emitters.
-- `src/cli.rs` is no longer a public root module; the binary calls the current
-  single-crate `run_cli` entrypoint until CLI moves to its own crate.
+- The root `Cargo.toml` is a workspace manifest and no longer defines a
+  compatibility package.
+- `crates/core/src/lib.rs` exposes language-phase modules and common
+  diagnostics/error aliases for `reconf-core`.
+- `crates/compiler/src/lib.rs` exposes the supported compiler-facing API:
+  `Compiler`, `CompileInput`, check/eval outputs, `DataValue`, emitter
+  facades, and common error aliases.
+- `crates/cli/src/lib.rs` exposes only the host entrypoint and REPL modules
+  needed by CLI/REPL tests. The binary is `crates/cli/src/main.rs`.
+- `crates/wasm/src/lib.rs` is a documented placeholder.
 
 Target:
 
-- Expose only the current supported compiler-facing API.
-- Do not preserve old public APIs only for backward compatibility during this
-  refactor.
-- Long term, the supported public API should come from `reconf-compiler`.
-- Continue making implementation submodules private behind facades before the
-  crate split, so the split moves coherent APIs instead of public file layout.
-- Keep shrinking root visibility where a module is only a host implementation
-  detail, without adding compatibility re-exports for old paths.
+- Keep old single-crate compatibility re-exports removed.
+- Continue shrinking visibility where a module is only an implementation detail.
+- Keep compiler-facing API in `reconf-compiler`; host UI API belongs in
+  `reconf-cli`.
+- Do not add target-specific code to `reconf-core`.
 
-### `src/cli.rs`
+### `crates/cli/src/cli.rs`
 
 Current:
 
@@ -1354,7 +1351,7 @@ Concrete cleanup:
 Current:
 
 - Removed as a live module.
-- The old loader behavior is now in `src/compiler/loader.rs` as
+- The old loader behavior is now in `crates/compiler/src/compiler/loader.rs` as
   `ModuleLoader`, but source-provider access is private to the loader and routed
   through intention-specific methods.
 - `compiler::loader::graph::ModuleGraph` owns resolved-module cache state,
@@ -1430,7 +1427,7 @@ Target:
 - Use explicit namespace scopes for all name-definition checks instead of
   scattered map membership tests in later compiler phases.
 
-### `src/lower/desugar.rs`
+### `crates/core/src/lower/desugar.rs`
 
 Current:
 
@@ -1524,7 +1521,7 @@ Target:
 - Keep type alias environments in core/type services.
 - Do not add shared environment bags that mix phase-owned data.
 
-### `src/eval/mod.rs`
+### `crates/core/src/eval/mod.rs`
 
 Current:
 
@@ -1612,7 +1609,7 @@ Temporary cleanup targets:
 - Reverse core-to-surface lowering has been removed. Keep lowering one-way:
   surface syntax enters the compiler once, then later phases operate on core.
 
-### `src/eval/builtins.rs`
+### `crates/core/src/eval/builtins.rs`
 
 Current:
 
@@ -1634,7 +1631,7 @@ Target:
 - Decide whether broader runtime behavior than prelude signatures is intended
   or temporary.
 
-### `src/compiler/prelude.rs` And `src/eval/prelude.reconf`
+### `crates/compiler/src/compiler/prelude.rs` And `crates/core/src/eval/prelude.reconf`
 
 Current:
 
@@ -1651,7 +1648,7 @@ Target:
 - Native registry and prelude declarations should be checked against each other.
 - Avoid hidden filesystem/module behavior for bundled prelude.
 
-### `src/refine/validate.rs`
+### `crates/core/src/refine/validate.rs`
 
 Current:
 
@@ -1678,7 +1675,7 @@ Target:
   representation is ready, so `CoreType::Refinement` no longer stores raw
   source-style predicate expressions.
 
-### `src/emit/json.rs`
+### `crates/compiler/src/emit/json.rs`
 
 Current:
 
@@ -1692,7 +1689,7 @@ Target:
 - Keep JSON ordering deterministic.
 - Keep formatting as `EmitOptions { style: OutputStyle }`.
 
-### `src/core/`
+### `crates/core/src/core/`
 
 Current:
 
@@ -1711,7 +1708,7 @@ Target:
 - Provide core-only debug helpers if needed.
 - Do not depend on evaluator, emitters, terminal UI, or output-format policy.
 
-### `src/source.rs`
+### `crates/core/src/source.rs`
 
 Current:
 
@@ -1724,7 +1721,7 @@ Target:
 - Support filesystem and memory-backed source loading through providers.
 - Make diagnostics refer to source ids instead of embedding source text early.
 
-### `src/diagnostic.rs` And `src/error.rs`
+### `crates/core/src/diagnostic.rs` And `crates/core/src/error.rs`
 
 Current:
 
@@ -1748,7 +1745,7 @@ Target:
 - Move `miette` rendering conversion to CLI/reporter layer.
 - Remove message-based span recovery.
 
-### `src/repl/`
+### `crates/cli/src/repl/`
 
 Current:
 
@@ -1965,10 +1962,10 @@ Do the workspace split after internal APIs are stable enough to move.
 ```text
 Cargo.toml
 crates/
-  reconf-core/
-  reconf-compiler/
-  reconf-cli/
-  reconf-wasm/
+  core/       # package: reconf-core
+  compiler/   # package: reconf-compiler
+  cli/        # package: reconf-cli
+  wasm/       # package: reconf-wasm
 examples/
 tests/
 doc/
@@ -2056,7 +2053,7 @@ Before moving crates, remove duplicated orchestration.
 
 Tasks:
 
-- `src/compiler.rs`, `src/compiler/`, and the internal `CompilerPipeline`
+- `crates/compiler/src/compiler.rs`, `crates/compiler/src/compiler/`, and the internal `CompilerPipeline`
   service are in place.
 - `CompileInput`, `CompilerOptions`, `CheckOutput`, and `EvalOutput` are in
   in place; compiler result objects expose methods rather than public storage
