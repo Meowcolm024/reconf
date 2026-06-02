@@ -13,23 +13,27 @@ impl OutputValidator {
     }
 
     pub fn validate(&self, value: &Value) -> Result<DataValue> {
+        Self::validate_value(value)
+    }
+
+    fn validate_value(value: &Value) -> Result<DataValue> {
         Ok(match value {
             Value::Int(value) => DataValue::Int(*value),
             Value::Float(value) => DataValue::Float(*value),
             Value::Bool(value) => DataValue::Bool(*value),
             Value::String(value) => DataValue::String(value.clone()),
             Value::None => DataValue::None,
-            Value::Some(value) => DataValue::Some(Box::new(self.validate(value)?)),
+            Value::Some(value) => DataValue::Some(Box::new(Self::validate_value(value)?)),
             Value::List(items) => DataValue::List(
                 items
                     .iter()
-                    .map(|item| self.validate(item))
+                    .map(Self::validate_value)
                     .collect::<Result<Vec<_>>>()?,
             ),
             Value::Record(fields) => DataValue::Record(
                 fields
                     .iter()
-                    .map(|(name, value)| Ok((name.clone(), self.validate(value)?)))
+                    .map(|(name, value)| Ok((name.clone(), Self::validate_value(value)?)))
                     .collect::<Result<BTreeMap<_, _>>>()?,
             ),
             Value::CoreClosure { .. } | Value::Native(_) => {

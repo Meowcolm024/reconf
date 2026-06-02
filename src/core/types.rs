@@ -136,21 +136,25 @@ impl<'a> CoreTypeValidator<'a> {
         name: &str,
         alias_ref: Option<TypeAliasRef>,
     ) -> bool {
+        Self::type_mentions_alias(ty, name, alias_ref)
+    }
+
+    fn type_mentions_alias(ty: &CoreType, name: &str, alias_ref: Option<TypeAliasRef>) -> bool {
         match ty {
-            CoreType::Spanned(ty, _) => self.mentions_alias(ty, name, alias_ref),
+            CoreType::Spanned(ty, _) => Self::type_mentions_alias(ty, name, alias_ref),
             CoreType::Alias(alias) => alias == name,
             CoreType::ResolvedAlias(alias) => Some(*alias) == alias_ref,
             CoreType::Option(inner) | CoreType::List(inner) => {
-                self.mentions_alias(inner, name, alias_ref)
+                Self::type_mentions_alias(inner, name, alias_ref)
             }
             CoreType::LiteralUnion(_) => false,
             CoreType::Record(fields) => fields
                 .values()
-                .any(|ty| self.mentions_alias(ty, name, alias_ref)),
-            CoreType::Refinement { base, .. } => self.mentions_alias(base, name, alias_ref),
+                .any(|ty| Self::type_mentions_alias(ty, name, alias_ref)),
+            CoreType::Refinement { base, .. } => Self::type_mentions_alias(base, name, alias_ref),
             CoreType::Function(input, output) => {
-                self.mentions_alias(input, name, alias_ref)
-                    || self.mentions_alias(output, name, alias_ref)
+                Self::type_mentions_alias(input, name, alias_ref)
+                    || Self::type_mentions_alias(output, name, alias_ref)
             }
             CoreType::Int | CoreType::Float | CoreType::Bool | CoreType::String => false,
         }

@@ -273,13 +273,10 @@ impl CoreElaborator {
                 expr: CoreExpr::String(value.clone()),
                 ty: CoreType::String,
             })),
-            CoreExpr::Var(name) => Ok(match values.local_value(name) {
-                Some((local, ty)) => Some(TypedCoreExpr {
-                    expr: CoreExpr::Local(local),
-                    ty: ty.clone(),
-                }),
-                None => None,
-            }),
+            CoreExpr::Var(name) => Ok(values.local_value(name).map(|(local, ty)| TypedCoreExpr {
+                expr: CoreExpr::Local(local),
+                ty: ty.clone(),
+            })),
             CoreExpr::Global(binding) => Ok(Some(TypedCoreExpr {
                 expr: CoreExpr::Global(*binding),
                 ty: values
@@ -581,9 +578,13 @@ impl CoreElaborator {
     }
 
     fn unsynthesizable_expr_error(&self, expr: &CoreExpr) -> Error {
+        Self::unsynthesizable_error(expr)
+    }
+
+    fn unsynthesizable_error(expr: &CoreExpr) -> Error {
         match expr {
             CoreExpr::Spanned(expr, span) => {
-                let error = self.unsynthesizable_expr_error(expr);
+                let error = Self::unsynthesizable_error(expr);
                 let message = error.message().to_string();
                 error.with_label(span.clone(), message)
             }
@@ -615,8 +616,12 @@ impl CoreElaborator {
     }
 
     fn is_show(&self, expr: &CoreExpr, values: &dyn CoreValueTypeContext) -> bool {
+        Self::is_show_expr(expr, values)
+    }
+
+    fn is_show_expr(expr: &CoreExpr, values: &dyn CoreValueTypeContext) -> bool {
         match expr {
-            CoreExpr::Spanned(expr, _) => self.is_show(expr, values),
+            CoreExpr::Spanned(expr, _) => Self::is_show_expr(expr, values),
             CoreExpr::Var(name) => name == "show",
             CoreExpr::Global(binding) => {
                 let Some(ty) = values.global_type(*binding) else {

@@ -620,8 +620,12 @@ impl<'a> CoreValueChecker<'a> {
     }
 
     fn type_name(&self, ty: &CoreType) -> &'static str {
+        Self::core_type_name(ty)
+    }
+
+    fn core_type_name(ty: &CoreType) -> &'static str {
         match ty {
-            CoreType::Spanned(ty, _) => self.type_name(ty),
+            CoreType::Spanned(ty, _) => Self::core_type_name(ty),
             CoreType::Int => "Int",
             CoreType::Float => "Float",
             CoreType::Bool => "Bool",

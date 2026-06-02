@@ -92,29 +92,34 @@ struct TypeLowerer;
 
 impl TypeLowerer {
     fn lower(&mut self, ty: Type) -> CoreType {
+        Self::lower_type(ty)
+    }
+
+    fn lower_type(ty: Type) -> CoreType {
         match ty {
-            Type::Spanned(ty, span) => CoreType::Spanned(Box::new(self.lower(*ty)), span),
+            Type::Spanned(ty, span) => CoreType::Spanned(Box::new(Self::lower_type(*ty)), span),
             Type::Int => CoreType::Int,
             Type::Float => CoreType::Float,
             Type::Bool => CoreType::Bool,
             Type::String => CoreType::String,
-            Type::Option(inner) => CoreType::Option(Box::new(self.lower(*inner))),
-            Type::List(inner) => CoreType::List(Box::new(self.lower(*inner))),
+            Type::Option(inner) => CoreType::Option(Box::new(Self::lower_type(*inner))),
+            Type::List(inner) => CoreType::List(Box::new(Self::lower_type(*inner))),
             Type::Record(fields) => CoreType::Record(
                 fields
                     .into_iter()
-                    .map(|(name, ty)| (name, self.lower(ty)))
+                    .map(|(name, ty)| (name, Self::lower_type(ty)))
                     .collect(),
             ),
             Type::LiteralUnion(choices) => CoreType::LiteralUnion(choices),
             Type::Refinement { binder, base, pred } => CoreType::Refinement {
                 binder,
-                base: Box::new(self.lower(*base)),
+                base: Box::new(Self::lower_type(*base)),
                 pred: Box::new(ExprLowerer::default().lower(*pred)),
             },
-            Type::Function(input, output) => {
-                CoreType::Function(Box::new(self.lower(*input)), Box::new(self.lower(*output)))
-            }
+            Type::Function(input, output) => CoreType::Function(
+                Box::new(Self::lower_type(*input)),
+                Box::new(Self::lower_type(*output)),
+            ),
             Type::Alias(name) => CoreType::Alias(name),
         }
     }
