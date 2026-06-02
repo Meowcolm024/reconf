@@ -24,6 +24,7 @@ pub enum ErrorCode {
     TypeApplyNonFunction,
     TypeNoneNeedsExpected,
     TypeRecursiveAlias,
+    TypeUnknown,
     TypeMismatch,
     TypeUnsupportedBuiltinArg,
     RecordDuplicateField,
@@ -47,6 +48,7 @@ pub const ERROR_CODES: &[ErrorCode] = &[
     ErrorCode::TypeApplyNonFunction,
     ErrorCode::TypeNoneNeedsExpected,
     ErrorCode::TypeRecursiveAlias,
+    ErrorCode::TypeUnknown,
     ErrorCode::TypeMismatch,
     ErrorCode::TypeUnsupportedBuiltinArg,
     ErrorCode::RecordDuplicateField,
@@ -86,6 +88,7 @@ impl ErrorCode {
             ErrorCode::TypeApplyNonFunction => "E_TYPE_008",
             ErrorCode::TypeNoneNeedsExpected => "E_TYPE_006",
             ErrorCode::TypeRecursiveAlias => "E_TYPE_002",
+            ErrorCode::TypeUnknown => "E_TYPE_003",
             ErrorCode::TypeMismatch => "E_TYPE_017",
             ErrorCode::TypeUnsupportedBuiltinArg => "E_TYPE_014",
             ErrorCode::RecordDuplicateField => "E_RECORD_003",
@@ -111,6 +114,7 @@ impl ErrorCode {
             ErrorCode::TypeApplyNonFunction => "attempted to apply a non-function value",
             ErrorCode::TypeNoneNeedsExpected => "none needs an expected option type",
             ErrorCode::TypeRecursiveAlias => "recursive type alias",
+            ErrorCode::TypeUnknown => "unknown type",
             ErrorCode::TypeMismatch => "type mismatch",
             ErrorCode::TypeUnsupportedBuiltinArg => "unsupported native function argument",
             ErrorCode::RecordDuplicateField => "duplicate record field",
@@ -133,8 +137,14 @@ pub struct Error {
     code: ErrorCode,
     message: String,
     source_code: Option<Arc<miette::NamedSource<String>>>,
-    span: Option<miette::SourceSpan>,
-    label: String,
+    labels: Vec<DiagnosticLabel>,
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticLabel {
+    pub span: std::ops::Range<usize>,
+    pub message: String,
 }
 
 impl Error {
@@ -147,23 +157,40 @@ impl Error {
             code,
             message: message.into(),
             source_code: None,
-            span: None,
-            label: String::new(),
+            labels: Vec::new(),
+            notes: Vec::new(),
         }
     }
 
-    pub fn with_source_span(
-        mut self,
-        name: impl AsRef<str>,
-        source: impl Into<String>,
-        span: std::ops::Range<usize>,
-        label: impl Into<String>,
-    ) -> Self {
+    pub fn with_label(mut self, span: std::ops::Range<usize>, label: impl Into<String>) -> Self {
         if span.start <= span.end {
-            self.source_code = Some(Arc::new(miette::NamedSource::new(name, source.into())));
-            self.span = Some((span.start, span.end - span.start).into());
-            self.label = label.into();
+            self.labels.push(DiagnosticLabel {
+                span,
+                message: label.into(),
+            });
         }
+        self
+    }
+
+    pub fn with_source(mut self, name: impl AsRef<str>, source: impl Into<String>) -> Self {
+        self.source_code = Some(Arc::new(miette::NamedSource::new(name, source.into())));
+        self
+    }
+
+    pub fn with_placeholder_source(self, source: impl Into<String>) -> Self {
+        self.with_source("<source>", source)
+    }
+
+    pub fn with_source_name(mut self, name: impl AsRef<str>) -> Self {
+        if let Some(source) = self.source_code.as_ref() {
+            let contents = source.inner().clone();
+            self.source_code = Some(Arc::new(miette::NamedSource::new(name, contents)));
+        }
+        self
+    }
+
+    pub fn with_note(mut self, note: impl Into<String>) -> Self {
+        self.notes.push(note.into());
         self
     }
 
@@ -173,6 +200,22 @@ impl Error {
 
     pub fn code(&self) -> ErrorCode {
         self.code
+    }
+
+    pub fn diagnostic_labels(&self) -> &[DiagnosticLabel] {
+        &self.labels
+    }
+
+    pub fn has_source_code(&self) -> bool {
+        self.source_code.is_some()
+    }
+
+    pub fn source_name(&self) -> Option<&str> {
+        self.source_code.as_ref().map(|source| source.name())
+    }
+
+    pub fn notes(&self) -> &[String] {
+        &self.notes
     }
 }
 
@@ -188,12 +231,18 @@ impl miette::Diagnostic for Error {
     }
 
     fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
-        self.span.map(|span| {
-            Box::new(std::iter::once(miette::LabeledSpan::new_with_span(
-                Some(self.label.clone()),
-                span,
-            ))) as Box<dyn Iterator<Item = miette::LabeledSpan>>
+        (!self.labels.is_empty()).then(|| {
+            Box::new(self.labels.iter().map(|label| {
+                miette::LabeledSpan::new_with_span(
+                    Some(label.message.clone()),
+                    (label.span.start, label.span.end - label.span.start),
+                )
+            })) as Box<dyn Iterator<Item = miette::LabeledSpan>>
         })
+    }
+
+    fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        (!self.notes.is_empty()).then(|| Box::new(self.notes.join("\n")) as Box<_>)
     }
 }
 
@@ -203,8 +252,8 @@ impl Clone for Error {
             code: self.code,
             message: self.message.clone(),
             source_code: self.source_code.clone(),
-            span: self.span,
-            label: self.label.clone(),
+            labels: self.labels.clone(),
+            notes: self.notes.clone(),
         }
     }
 }

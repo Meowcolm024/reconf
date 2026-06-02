@@ -73,10 +73,22 @@ designed around generic contracts, reusable data representations, and clear
 ownership boundaries, not around special cases for one frontend, test harness,
 output format, or deployment target.
 
+This also means using Rust's encapsulation and abstraction tools deliberately.
+Avoid C-style bags of unrelated free functions that manipulate shared data from
+the outside. Prefer cohesive structs, traits, impl blocks, and narrow methods
+when a phase has state, policy, or a meaningful behavioral boundary. Free
+functions are acceptable for small pure utilities, but compiler phases such as
+lowering, adaptation, source loading, emitting, resolving, checking, and
+normalizing should be modeled as services or capabilities with explicit
+contracts. The goal is not object-oriented ceremony; the goal is ownership,
+local reasoning, substitutability, and decoupling.
+
 This principle applies across all crates:
 
 - Prefer target-neutral abstractions such as source providers, compiler inputs,
   diagnostics, typed core, and emitters.
+- Encapsulate phase behavior behind Rust types and traits instead of spreading
+  phase logic across flat helper functions.
 - Keep frontend-specific behavior at the frontend boundary.
 - Keep output-specific behavior at the emitter boundary.
 - Keep test support outside production phase logic.
@@ -84,6 +96,10 @@ This principle applies across all crates:
   targets when a generic capability is the real requirement.
 - If one caller needs unusual behavior, model the underlying capability
   generically before adding caller-specific code.
+- Temporary migration code must be explicit. Mark it near the implementation
+  with `TEMP(refactor-stage-*)`, state what replaces it, and remove it in the
+  cleanup stage instead of letting compatibility scaffolding become invisible
+  design.
 - Keep `reconf-core` clean: no terminal UI assumptions, no process/filesystem
   policy, no line-editor state, and no output-format policy in core phases.
 
@@ -140,10 +156,9 @@ Current code:
 - `src/syntax/surface.rs` defines `FileAst`, `Decl`, `Type`, `Expr`, and
   `StrPart`.
 - `src/syntax/parser.rs` converts Pest pairs into this unspanned surface AST.
-- `src/lower/desugar.rs` takes `FileAst` and returns `FileAst`.
-- `src/typeck/bidir.rs` checks `Expr` and `Type`.
-- `src/eval/mod.rs` evaluates `Expr`.
-- `src/refine/validate.rs` evaluates refinement predicate `Expr`.
+- `src/lower/desugar.rs` lowers `FileAst` into core syntax.
+- Type checking, normalization, and refinement validation now operate on core
+  syntax.
 - `src/repl/semantic.rs` walks `FileAst` for semantic highlighting.
 
 Problem:
@@ -209,34 +224,69 @@ Refactor direction:
 
 Current code:
 
-- `resolve::modules::Loader::load` reads imported files, parses, lowers, and
-  calls `eval_file`.
-- `eval_file` inserts prelude definitions, evaluates imports, checks
-  declarations, evaluates output, and validates function escape.
+- `compiler::loader::ModuleLoader` owns source-provider access for both entry
+  inputs and imports. It exposes intention-specific loading methods instead of
+  leaking mutable access to the provider, then delegates frontend compilation,
+  caching, cycle detection, and module compilation through narrower services.
+- `resolve::resolved::ResolvedProgram`, `ResolvedModule`, and
+  `ResolvedExports` are the first resolved artifacts. The module evaluator
+  imports through this narrowed resolved boundary instead of receiving an entire
+  imported `Module`.
+- `ResolvedModule` carries its module path identity, and
+  `ModuleLoader::load_resolved` is the explicit import-facing module loading
+  boundary.
+- `ResolvedModuleBody` carries explicit `ResolvedImport` entries and
+  `ResolvedDecl` declarations. Value-bearing declarations carry `GlobalRef`
+  binding ids before elaboration/evaluation, and same-module value references
+  are rewritten to `CoreExpr::Global` at this boundary.
+- `ModuleCompiler` and `ModuleEvaluator` consume `ResolvedModuleBody`, so module
+  evaluation now enters through the resolved artifact instead of the raw lowered
+  `CoreModule`.
+- `ModuleGraph` caches `ResolvedModule` values directly and records them in the
+  `ResolvedProgram`. Evaluated `Module` values are transient artifacts used only
+  to compute the resolved export table while a module is being loaded.
+- Requested import selection and missing/duplicate requested-name validation
+  now live on resolved import/export artifacts through `ResolvedImport` and
+  `ResolvedImportSelector`; module evaluation loads the target module and asks
+  the import artifact to select from its exports.
+- `compiler::module::ModuleEvaluator` inserts context definitions, evaluates
+  imports, checks declarations, evaluates output, and builds exports.
 
 Problem:
 
-Resolver is responsible for module graph behavior and for most of the compiler
-pipeline. This makes it hard to use the same pipeline from CLI, REPL, tests, or
-other hosts without re-entering resolver internals.
+Module graph behavior has moved out of `resolve`, and import selection now goes
+through a resolved export table. Imported files are still evaluated to compute
+runtime exports, but the graph cache and import-facing API store and return
+`ResolvedModule` artifacts directly.
 
 Refactor direction:
 
-- Resolver should own module graph loading, import/export validation, and name
-  resolution.
-- Pipeline orchestration should move to a compiler pipeline layer.
+- Resolver should eventually own resolved module/name data structures rather
+  than evaluated module values.
+- Pipeline orchestration should stay in the compiler pipeline layer.
 - Prelude setup should be explicit in compiler context construction.
-- Output validation should move out of resolver.
+- Output validation should stay in the compiler/output boundary.
 
 ### CLI, REPL, And Tests Duplicate Pipeline Logic
 
 Current code:
 
-- `src/cli.rs::eval_path` reads files, parses, lowers, creates a loader, and
-  extracts `$output`.
-- `src/repl/eval.rs` builds synthetic accumulated source, parses, lowers,
-  creates a loader, evaluates, and emits.
-- `tests/fixtures.rs` and `tests/determinism.rs` repeat similar helpers.
+- `src/compiler.rs` exposes `Compiler`, `CompilerOptions`, `CompileInput`,
+  `CheckOutput`, and `EvalOutput`.
+- `src/compiler/pipeline.rs` owns shared parse/lower/entry-compile
+  orchestration for `Compiler` and `CompilerSession`.
+- CLI and integration tests call `Compiler::check` or `Compiler::eval`, while
+  REPL evaluation calls `CompilerSession`; none of these callers reconstruct
+  parser/lowerer/loader/evaluator wiring.
+- `CompileInput` adapts path-backed and source-backed inputs into one pipeline
+  entry shape.
+- `CheckOutput` and `EvalOutput` expose accessors and owned conversion methods
+  instead of public result fields, so callers do not couple to compiler result
+  storage.
+- `EvalOutput` owns data-output validation, so emitters receive `DataValue`.
+- Syntax/core modules can represent declaration-only inputs, so the REPL no
+  longer injects a sentinel output expression.
+- REPL declaration and expression inputs call the compiler-owned session API.
 
 Problem:
 
@@ -245,20 +295,28 @@ loading requires edits in several places.
 
 Refactor direction:
 
-- Add a shared compiler pipeline API.
-- CLI, REPL, and tests call the same API.
+- Continue consolidating behavior behind the shared compiler pipeline API.
 - Host-specific code provides sources and output preferences only.
+- REPL state is now represented by `compiler::session::CompilerSession`, which
+  reuses the shared compiler pipeline.
+- Accepted declaration artifacts are owned by `SessionArtifacts`, a private
+  session-state service that commits frontend outputs and composes declaration
+  or expression inputs as paired surface/core artifacts. `CompilerSession`
+  orchestrates compilation instead of managing parallel artifact vectors.
 
 ### Diagnostics Are Coupled To Message Text
 
 Current code:
 
-- `Error` contains one optional span and label.
-- `diagnostic::attach_best_effort_span` inspects error messages such as
-  `unknown type`, `division by zero`, and `recursive type alias`.
-- Some parser error codes are selected from source-text heuristics.
-- Parser errors are converted to `Error` early, so later code does not receive
-  structured parse error kinds.
+- `Error` stores structured labels and notes.
+- `DiagnosticSource` is the explicit compiler-boundary source context used when
+  a producer emits structured labels without an embedded source object.
+- Parser duplicate-field, empty-interpolation, and unterminated-interpolation
+  diagnostics attach producer-owned labels.
+- Runtime division-by-zero, core type alias, and refinement failure diagnostics
+  attach labels from carried origin metadata.
+- Parser errors are still converted to `Error` early, so later code does not
+  receive structured parse error kinds.
 
 Problem:
 
@@ -300,9 +358,13 @@ Refactor direction:
 
 Current code:
 
-- `resolve::modules::eval_file` checks `contains_function` on `$output`.
-- `emit/json.rs` rejects functions again.
-- `eval::emit` also rejects functions.
+- `compiler::output::OutputValidator` owns function-output rejection.
+- `Compiler::eval` validates the final output through `OutputValidator` into
+  `DataValue`.
+- Emitters consume `DataValue`.
+- `emit::EmitterRegistry` owns a collection of `Emitter` implementations and
+  centralizes output-format lookup, so hosts do not match directly on concrete
+  emitter implementations.
 
 Problem:
 
@@ -325,30 +387,100 @@ reasonable MVP shortcuts, but they are the places the refactor should unwind.
 
 Files:
 
-- `src/resolve/modules.rs`
+- Old location: `src/resolve/modules.rs`
+- Current transition location: `src/compiler/loader.rs`, `src/compiler/module.rs`,
+  and `src/compiler/module/`
 
 Current violation:
 
-- `Loader::load` canonicalizes filesystem paths, reads files from disk, parses,
-  lowers, attaches source spans, recurses through imports, evaluates modules,
-  and caches evaluated `Module` values.
-- `eval_file_inner` inserts the prelude, checks declarations, evaluates values,
-  builds exports, evaluates final output, and performs function-output
-  validation.
+- `ModuleLoader` keeps `SourceProvider` private and exposes loader-level methods
+  for entry-source and import loading. Source text to surface/core compilation is
+  delegated to `compiler::front::FrontendCompiler`.
+- `compiler::loader::graph::ModuleGraph` owns resolved-module caching,
+  in-progress module tracking, cycle detection, and `ResolvedProgram`
+  recording. The in-progress `LoadingModule` token carries the
+  `ResolvedModuleBuilder`, so resolved-body provenance is no longer stored in a
+  loose graph side table.
+- `ModuleLoader` no longer exposes a normal evaluated-module `load` API for
+  imports. Import loading goes through `load_resolved`, and evaluated modules
+  remain a private cache detail.
+- `compiler::front::FrontendCompiler` owns the parse/lower frontend step and
+  attaches frontend diagnostics for entry compilation, imported modules, and
+  bundled prelude compilation.
+- `ModuleCompiler` is now the policy boundary between module graph loading and
+  module compilation. `ContextualModuleCompiler` evaluates modules with an
+  explicit `ModuleContext`; `ContextualModuleCompiler::with_prelude` requests a
+  context from `compiler::prelude::PreludeCompiler`. `EvaluatingModuleCompiler`
+  evaluates with an empty context for bundled prelude construction and targeted
+  tests.
+- `ResolvedProgram`, `ResolvedModule`, and `ResolvedExports` are the first
+  resolved artifacts; `ResolvedModule` / `ResolvedExports` are the
+  import-facing artifacts used by the evaluator.
+- `ResolvedModule` now carries a path identity, so module identity is not only
+  an external map key.
+- `ResolvedModuleBody` exposes explicit `ResolvedImport` data and
+  `ResolvedDecl` declarations. `ResolvedDecl::Native` and `ResolvedDecl::Let`
+  carry `GlobalRef` value binding ids, so module elaboration no longer invents
+  declaration-local global ids. Same-module value references in declaration
+  bodies and module output are resolved against those ids before elaboration.
+- Compiler module exports use private module-owned `ValueExport` metadata.
+  `ResolvedValueExport` is created only when `Module::resolved_exports` projects
+  module exports across the compiler/resolver boundary.
+- `ResolvedModuleBuilder` now carries the path and body before evaluation
+  finishes. `ModuleGraph` keeps that builder on the `LoadingModule` token and
+  finalizes it with `ResolvedExports`, instead of keeping loose resolved-body
+  side tables.
+  `compiler::module::Module` exposes only a `resolved_exports` projection for
+  this boundary.
+- `resolve::names::NameScope` now provides a reusable value/type namespace
+  abstraction for local-name collision detection without import-specific
+  diagnostics. `compiler::module` uses it through a narrow import binder instead
+  of open-coding import collision checks.
+- `compiler::module::Module` is no longer a public bag of environment maps.
+  Compiler/session callers retrieve output through methods, while module
+  evaluation mutates values, type aliases, value types, and exports through
+  module-owned operations.
+- Selected import application is a module-state operation:
+  `ModuleImportBinder` validates requested names and collisions, then delegates
+  selected export insertion to `Module::import_selection` through the
+  `ResolvedImportTarget` capability.
+- `compiler::module::ModuleEvaluator` receives an explicit `ModuleContext` and
+  is the public module-evaluation service. It orchestrates import binding and
+  elaboration, while
+  `ModuleDeclEvaluator` evaluates elaborated declarations/output and builds
+  module-owned exports.
+- `src/compiler/module/` now separates module state, import binding, and module
+  evaluation into `state.rs`, `imports.rs`, and `eval.rs`; `module.rs` is the
+  narrow facade for public module-facing names.
 
 Why this is ad hoc:
 
-- Module resolution is tied to filesystem policy.
-- Resolver owns compiler orchestration that should be generic pipeline logic.
-- The prelude is a special path hidden inside module evaluation.
-- Output validation is mixed into module loading.
+- Module graph loading is no longer tied to filesystem policy or the `resolve`
+  module, frontend parsing/lowering has moved behind a compiler service, and
+  graph/cache/cycle state is encapsulated by `ModuleGraph`. Loaded imports are
+  cached as `ResolvedModule` artifacts and recorded in a `ResolvedProgram`.
+  Module evaluation remains a private export-computation step instead of the
+  public artifact exposed to import resolution.
+- Import selection and local-name collision detection have moved behind
+  resolved and name-scope abstractions. Module import binding still translates
+  collisions into import diagnostics, while selected export insertion is now
+  owned by module state.
+- Prelude setup is no longer hidden behind a boolean in module evaluation.
+  It is an explicit `ModuleContext` supplied through `ContextualModuleCompiler`,
+  and bundled prelude construction is owned by `PreludeCompiler`.
+- Module evaluation has been split into import binding, elaboration
+  orchestration, and declaration execution services. Resolved modules are now
+  the graph cache and import-facing output; evaluated modules remain internal to
+  export computation.
 
 Target:
 
 - Source loading moves behind `SourceProvider`.
-- Resolver owns module graph, import/export checks, and name resolution only.
+- Introduce resolved module/program structures for import/export checks and name
+  resolution.
 - Compiler pipeline owns parse/lower/check/eval/refine/output orchestration.
-- Prelude setup becomes compiler context construction.
+- Continue reducing eager prelude construction after the explicit
+  `ModuleContext` boundary is stable.
 - Output validation becomes a separate phase.
 
 ### CLI, REPL, And Tests Rebuild The Pipeline
@@ -362,9 +494,17 @@ Files:
 
 Current violation:
 
-- Each path performs its own read/parse/lower/load/evaluate/extract-output
-  sequence.
-- REPL constructs synthetic source with a sentinel output expression.
+- Shared CLI, REPL, and integration paths now call the compiler pipeline rather
+  than rebuilding parse/lower/load/evaluate wiring.
+- `Compiler` and `CompilerSession` share the internal `CompilerPipeline`
+  service for source parsing, lowering, diagnostic source context, and entry
+  compilation.
+- CLI `check` now calls `Compiler::check`; output validation and data emission
+  remain on the eval/output path.
+- REPL declaration state now lives in `CompilerSession` and its private
+  `SessionArtifacts` store instead of frontend source-text accumulation.
+- CLI, REPL, fixtures, determinism checks, language tests, and compiler
+  integration tests route normal output formatting through `EmitterRegistry`.
 - Tests use production internals directly instead of a stable compiler API.
 
 Why this is ad hoc:
@@ -385,15 +525,13 @@ Target:
 
 Files:
 
-- `src/typeck/bidir.rs`
-- `src/typeck/unify.rs`
+- Removed `src/typeck/bidir.rs`
 
 Current violation:
 
-- `check_expr` and `synth_expr` return `Value`.
-- The checker evaluates expressions while checking.
-- Contextual elaboration is represented only by returned runtime values.
-- Runtime value/type compatibility lives next to type expansion logic.
+- The old surface bidirectional checker has been removed.
+- Contextual elaboration is represented in core before runtime checking.
+- The old surface-type/runtime-value compatibility module has been removed.
 
 Why this is ad hoc:
 
@@ -417,17 +555,21 @@ Files:
 
 Current violation:
 
-- `Value::Closure` stores surface `Expr`.
-- `eval` consumes surface `Expr`.
-- `eval` accepts type aliases.
-- `eval` calls `check_expr` for annotated local lets and ascriptions.
-- `eval::emit` prints ReConf data syntax and rejects functions.
+- Runtime closures store core expressions.
+- The surface evaluator has been removed.
+- Runtime function application is exposed through a core applicator service.
 
 Why this is ad hoc:
 
-- The evaluator owns part of static semantics.
-- Runtime closures depend on surface AST.
-- Output formatting is mixed into runtime evaluation.
+- Checked-normalization callers now compose `CoreElaborator` with
+  evaluator-owned `PreparedCoreNormalizer` explicitly. The production
+  `typeck::CheckedCoreNormalizer` bridge has been removed, so typeck no longer
+  imports evaluator code just to provide a convenience path.
+- Runtime closure application uses prepared-core normalization and does not
+  re-enter the checked-normalization boundary.
+- Checked ascriptions are erased during elaboration; prepared normalization
+  rejects any remaining ascription as unelaborated input instead of invoking
+  type checking.
 
 Target:
 
@@ -444,7 +586,7 @@ Files:
 - `src/syntax/surface.rs`
 - `src/lower/desugar.rs`
 - `src/core/ast.rs`
-- `src/core/pretty.rs`
+- Removed `src/core/pretty.rs`
 
 Current violation:
 
@@ -452,7 +594,7 @@ Current violation:
   refinement validator, REPL semantic tracking, and tests.
 - `lower_file` returns another `FileAst`.
 - `core::ast` re-exports surface AST and runtime `Value`.
-- `core::pretty` delegates to runtime value printing.
+- The old `core::pretty` helper has been removed.
 
 Why this is ad hoc:
 
@@ -479,21 +621,46 @@ Files:
 
 Current violation:
 
-- `attach_best_effort_span` inspects rendered error messages to infer meaning.
-- Parser error codes use source-text heuristics such as empty interpolation and
-  unmatched quote checks.
-- `Error` supports only one optional label.
+- `DiagnosticSource` still attaches source text at compiler entry boundaries for
+  already-labeled errors whose spans are byte offsets into that source.
+- Parser diagnostics now build producer-owned labels separately from placeholder
+  source text; `DiagnosticSource` owns renaming placeholder sources to real
+  compiler-boundary names.
+- `Error` exposes separate source and label APIs; the old combined
+  source-span helper has been removed so producers do not hide source
+  attachment inside label construction.
+- Surface and core expressions now have a transparent `Spanned` wrapper for
+  source-origin propagation. Runtime division-by-zero diagnostics use that
+  origin instead of message-text recovery.
+- Surface and core types now have a transparent `Spanned` wrapper for
+  source-origin propagation. Unknown and recursive type diagnostics use that
+  origin instead of message-text recovery.
+- Refinement failures now use checked-expression origin metadata instead of
+  message-text recovery.
+- Parser empty-interpolation, unterminated-interpolation, duplicate-field, and
+  top-level unterminated-string diagnostics use producer-owned spans instead of
+  whole-source string heuristics.
+- `Error` supports multiple structured labels and notes.
 
 Why this is ad hoc:
 
-- Display text acts as structured diagnostic data.
-- Source spans are rediscovered after the producing phase has already lost
-  context.
-- Diagnostics are hard to compose across phases.
+- Source attachment still happens after the producing phase, so diagnostics do
+  not yet carry stable source ids through every phase.
+- Diagnostics are easier to compose now that labels and notes are structured,
+  but source identity is still attached by boundary adapters.
+- Runtime division-by-zero is no longer part of this fallback, but other
+  producers still need to attach labels directly.
+- Unknown and recursive type diagnostics are no longer part of this fallback.
+- Refinement failures are no longer part of this fallback.
 
 Target:
 
 - Phase-owned structured diagnostics.
+- Keep producer labels independent from rendering/source attachment.
+- Thread stable source ids/spans through phase outputs.
+- Move `miette` conversion policy to CLI/reporter code.
+- Replace compiler-boundary source attachment after diagnostics carry stable
+  source ids directly.
 - Parser constructs structured parse diagnostics directly.
 - Error values carry multiple labels and notes.
 - CLI/reporter handles `miette` rendering.
@@ -503,29 +670,37 @@ Target:
 Files:
 
 - `src/eval/builtins.rs`
-- `src/eval/prelude.rs`
+- `src/compiler/prelude.rs`
 - `src/eval/prelude.reconf`
 
 Current violation:
 
-- Native names are listed in `declared`.
-- Native arities are listed separately in `arity`.
-- Runtime behavior is listed separately in `call`.
+- Native names, arities, and implementations now live in `NativeRegistry`.
+- Native registry entries carry core type metadata and expose name, arity, and
+  type through accessors instead of public storage fields.
+- Runtime behavior is selected through a private `NativeImplementation` service
+  enum and executed by `NativeCall`, rather than public callback fields and a
+  flat pile of `native_*` functions.
 - Prelude signatures are listed in `prelude.reconf`.
-- Prelude module construction parses/lowers/evaluates through resolver internals.
+- Tests verify that exported prelude native names and types match registry
+  entries.
+- Prelude module construction lives in the compiler layer and evaluates through
+  module logic without hidden filesystem loading.
+- `PreludeCompiler` owns bundled prelude compilation and can produce either a
+  `Module` or the `ModuleContext` used by normal compiler construction.
 
 Why this is ad hoc:
 
 - Name, arity, type, and runtime implementation can drift.
 - Some runtime behavior is broader than the exposed prelude signatures.
-- Prelude setup is another special compiler path.
+- Prelude setup is still an eager compiler-context construction path, but the
+  construction behavior is now encapsulated by a compiler-layer service.
 
 Target:
 
-- Add `NativeRegistry`.
-- Tie native name, arity, type, and implementation together.
-- Make prelude setup part of compiler context.
-- Add tests that native registry metadata and prelude exposure agree.
+- Continue moving prelude setup toward explicit compiler context construction.
+- Decide whether broader runtime behavior than prelude signatures is intended
+  or temporary.
 
 ### Emitters Receive Runtime Values
 
@@ -533,7 +708,7 @@ Files:
 
 - `src/emit/json.rs`
 - `src/eval/mod.rs`
-- `src/resolve/modules.rs`
+- `src/compiler.rs`
 
 Current violation:
 
@@ -648,6 +823,43 @@ Should not be consumed by:
 
 Owned by resolver.
 
+Current:
+
+- `resolve::resolved::ResolvedProgram`, `ResolvedModule`, and
+  `ResolvedExports` exist as the first resolved artifacts.
+- Import loading returns `ResolvedModule`, not a full evaluated compiler
+  `Module`.
+- `ResolvedProgram` currently indexes resolved modules by the path identity
+  stored on each `ResolvedModule`.
+- `ModuleLoader::resolved_program` exposes the resolved modules loaded so far.
+- `compiler::loader::graph::ModuleGraph` caches `ResolvedModule` values
+  directly rather than evaluated/resolved module pairs.
+- `ResolvedImport` owns requested-name selection against `ResolvedExports`
+  through `select_from`, backed by `ResolvedImportSelector`. The resulting
+  selection applies through `ResolvedImportTarget`, so callers do not inspect
+  its storage or iterate its internal map directly.
+- `ResolvedModule` carries exports and a `ResolvedModuleBody`.
+- `ResolvedModuleBody` carries explicit `ResolvedImport` data and
+  `ResolvedDecl` declarations. Value-bearing declarations carry `GlobalRef`
+  binding ids, and same-module references are rewritten to `CoreExpr::Global`
+  before module evaluation.
+- Module compilation/evaluation consumes `ResolvedModuleBody`; raw lowered core
+  is converted by compiler pipeline/front-loader entry boundaries before module
+  compilation begins.
+- Resolved value exports carry `ResolvedValueExport` metadata with the runtime
+  value and optional core type metadata. Compiler module state keeps private
+  `ValueExport` metadata and projects it to resolved exports at the boundary.
+  Annotated and native exports provide type metadata; unannotated exports remain
+  untyped until synthesis is complete.
+- `ResolvedExportsBuilder` owns resolved export construction so callers define
+  value/type exports by capability rather than mutating the raw export map.
+- Resolved module construction from compiler-produced exports is owned by
+  `ResolvedModuleBuilder::finish`; the compiler module facade does not define
+  resolved-module constructors.
+- Resolved value declaration bindings are in place. Remaining resolver work is
+  to resolve all value references and imports against those bindings before
+  elaboration, rather than relying on name lookup during elaboration.
+
 Purpose:
 
 - Represent loaded modules.
@@ -674,7 +886,8 @@ Purpose:
 Core should represent:
 
 - Base, option, list, record, function, and refinement types.
-- Explicit variable references by symbol or binding id.
+- Explicit variable references by symbol or binding reference before
+  elaboration.
 - Explicit native references.
 - Explicit field projection.
 - Explicit `some` and `none`.
@@ -694,6 +907,44 @@ Core should not represent:
 - Implicit option construction.
 - Raw unresolved user-name strings for resolved bindings.
 
+Local binding representation:
+
+- Lowered core may keep user-facing names for diagnostics and because imports
+  and declarations have not necessarily been resolved yet.
+- Elaborated/evaluator core should not use raw strings for local variables.
+  Lambda/let locals now use `LocalRef`, a small typed De Bruijn-index wrapper,
+  instead of a naked `usize` or raw user-name string.
+- Elaborated/evaluator core should not use raw strings for known global values.
+  Module declarations, imported values, and native values now use `GlobalRef`,
+  a stable value binding id allocated by module elaboration/module state.
+- Resolved/core type aliases should not rely only on raw type-name strings after
+  name resolution. Same-module aliases now use `TypeAliasRef` and
+  `CoreType::ResolvedAlias`; `CoreType::Alias(String)` remains the
+  lowered/unresolved syntax form.
+- Do not force globals into De Bruijn form unless module resolution naturally
+  creates a global environment model that benefits from it.
+- The current implementation uses indices because evaluator stack lookup is the
+  dominant operation. Revisit levels only if later phases need stable references
+  while extending the local context.
+- Preserve source-origin/name metadata separately for diagnostics, rather than
+  using display names as semantic identity.
+
+De Bruijn decision:
+
+- `CoreExpr::Local(LocalRef)` currently uses De Bruijn indices in prepared /
+  evaluator core. This matches the current evaluator model, where local lookup
+  is stack-relative and happens after elaboration has already fixed binder
+  identity.
+- Do not expose naked `usize` indices outside the local-binding service. Keep
+  `LocalRef` as the semantic handle so a later switch from indices to levels
+  remains a localized core/evaluator change instead of a cross-project rewrite.
+- Prefer De Bruijn levels only if later elaboration, normalization, or
+  diagnostics need local references that remain stable under context extension.
+  That would be a real design change, not a formatting cleanup.
+- Keep global/module/native references separate from local De Bruijn
+  references. `GlobalRef` and `TypeAliasRef` are resolved symbol identities, not
+  stack addresses.
+
 ### Typed/Elaborated Core
 
 Owned by type checker/elaborator.
@@ -711,12 +962,15 @@ Must make explicit:
 - Checked record field order.
 - Expanded or resolved aliases where needed.
 - Native and user binding types.
+- Local binder references as `LocalRef` De Bruijn indices.
+- Known module/global/native value references as `GlobalRef` binding ids.
 
 Should not:
 
 - Treat refinement predicates as SMT constraints.
 - Validate refinement predicates during ordinary shape checking.
 - Invent refined types during synthesis.
+- Carry unresolved local-variable strings into evaluator input.
 
 Suggested artifacts:
 
@@ -737,6 +991,53 @@ Use arenas or stable ids if span mapping, sharing, or diagnostics become
 awkward with boxed trees. The important rule is that phases after elaboration
 should not inspect surface AST variants.
 
+Implemented local-reference shape:
+
+```rust
+pub struct LocalRef {
+    index: usize,
+}
+
+pub struct BinderInfo {
+    pub debug_name: Option<Symbol>,
+    pub origin: Option<Span>,
+}
+```
+
+`LocalRef` currently stores a De Bruijn index because runtime lookup uses a
+stack of local values. A future arena/context representation may switch to
+levels if stable references under context extension become more valuable than
+stack lookup. The design constraint should remain: semantic local identity is
+structural, while user names are diagnostic metadata.
+
+Current transition:
+
+- `CoreModuleElaborator` is the module-level elaboration service.
+- Annotated and unannotated declarations are elaborated into typed core.
+- Unannotated literals, known value references, records, non-empty homogeneous
+  lists, field projection, `if`, `let`, lambdas, application, unary operators,
+  and supported binary operators now synthesize `TypedCoreExpr` using a
+  value-type context.
+- Bare `none`, empty lists, unknown identifiers, and other unsynthesizable
+  expressions now fail in the elaboration phase with structured type errors
+  instead of falling through to checked normalization.
+- The temporary `ElaboratedExpr::Prepared` module-evaluation path has been
+  removed.
+- Lambda/let-local references in synthesized expressions are rewritten to
+  `CoreExpr::Local(LocalRef)`. Checked refinement validation also accepts a
+  `CheckedRefinementPredicate` and evaluates predicates through the local stack.
+- Known module/global/native value references in synthesized expressions are
+  rewritten to `CoreExpr::Global(GlobalRef)`. `CoreExpr::Var(String)` remains
+  the unresolved/lowered-core name form and is still accepted by direct
+  evaluator paths used below the elaboration boundary.
+- `ResolvedDecl` now carries value binding ids before elaboration/evaluation.
+  Same-module value references are resolved to those ids in `ResolvedModuleBody`;
+  imported/context value references are resolved after import/context binding
+  through the `ResolvedValueBindings` capability. Module-local value bindings
+  are rebased against already-bound context/import bindings before elaboration,
+  so `GlobalRef` ids share one runtime namespace. Elaboration no longer rewrites
+  global names into global ids.
+
 ### Runtime Value
 
 Owned by evaluator.
@@ -745,6 +1046,8 @@ Purpose:
 
 - Represent normalized computation results.
 - Represent closures and native functions internally.
+- Keep runtime environment state encapsulated behind an environment type instead
+  of exposing map/reference-counting details to callers.
 
 Should not be:
 
@@ -863,14 +1166,15 @@ Native functions should be described by structured registry entries.
 
 ```rust
 pub struct NativeSpec {
-    pub name: Symbol,
-    pub ty: CoreType,
-    pub arity: usize,
-    pub implementation: NativeImpl,
+    name: Symbol,
+    ty: CoreType,
+    arity: usize,
+    implementation: NativeImplementation,
 }
 ```
 
-This should replace scattered native metadata.
+`NativeSpec` should expose narrow accessors and an apply boundary; callers
+should not reach into registry storage or callback details.
 
 ## Crate Split
 
@@ -994,14 +1298,26 @@ Future responsibilities:
 
 Current:
 
-- Re-exports many implementation modules.
-- Exposes `run`, `emit_json`, and error types directly.
+- Still exposes the single-crate module tree while the crate split is delayed.
+- Several leaf implementation modules are now private behind module facades:
+  `core::{...}`, `emit::{DataValue, EmitterRegistry, OutputFormat}`,
+  `lower::SurfaceToCoreLowerer`, and `typeck::{CoreElaborator,
+  CoreModuleElaborator}`.
+- The root re-exports only the currently useful emitter facade types and common
+  error aliases instead of re-exporting concrete emitters.
+- `src/cli.rs` is no longer a public root module; the binary calls the current
+  single-crate `run_cli` entrypoint until CLI moves to its own crate.
 
 Target:
 
-- During transition, re-export compatibility APIs only where needed.
-- Long term, public API should come from `reconf-compiler`.
-- Internal modules should become private when moved to crates.
+- Expose only the current supported compiler-facing API.
+- Do not preserve old public APIs only for backward compatibility during this
+  refactor.
+- Long term, the supported public API should come from `reconf-compiler`.
+- Continue making implementation submodules private behind facades before the
+  crate split, so the split moves coherent APIs instead of public file layout.
+- Keep shrinking root visibility where a module is only a host implementation
+  detail, without adding compatibility re-exports for old paths.
 
 ### `src/cli.rs`
 
@@ -1025,72 +1341,123 @@ Target:
 
 Concrete cleanup:
 
-- Remove `eval_path`.
-- Remove direct `parse`, `lower_file`, `Loader`, and `eval_file` usage.
-- Replace `pretty`/`compact` booleans with one output style enum if more output
-  modes are added.
+- `eval_path` has been removed from the compiler API.
+- Remove direct `parse`, `lower_file`, old `Loader`, and free-function module
+  evaluation usage.
+- Keep `check` on the check-only compiler path; do not validate data-output
+  constraints for `reconf check`.
+- Adapt CLI formatting flags into `OutputStyle` at the host boundary; emitters
+  receive structured options, not CLI flag booleans.
 
 ### `src/resolve/modules.rs`
 
 Current:
 
-- `Loader` owns cache and cycle detection.
-- Loads files from filesystem.
-- Parses and lowers imported files.
-- Evaluates modules.
-- Inserts prelude.
-- Builds output value.
+- Removed as a live module.
+- The old loader behavior is now in `src/compiler/loader.rs` as
+  `ModuleLoader`, but source-provider access is private to the loader and routed
+  through intention-specific methods.
+- `compiler::loader::graph::ModuleGraph` owns resolved-module cache state,
+  cycle tracking, loading tokens with resolved-module builders, and
+  resolved-program recording.
+- `src/resolve/resolved.rs` now owns `ResolvedProgram`, `ResolvedModule`, and
+  `ResolvedExports`.
+- `ModuleLoader` delegates resolved-program recording to `ModuleGraph`, whose
+  cache entries carry resolved module artifacts directly.
+- `ModuleLoader::load_resolved` is now the import-facing load path; evaluated
+  module cache access stays private to graph loading.
+- `compiler::front::FrontendCompiler` owns parse/lower orchestration for
+  `CompilerPipeline`, imported module loading, bundled prelude compilation, and
+  session inputs. `SessionArtifacts` owns accepted declaration storage and
+  composes frontend outputs after the shared frontend service has parsed and
+  lowered them.
+- `ResolvedImport` owns requested import selection against a target export table;
+  `ResolvedImportSelector` owns the unexported or duplicate requested-name
+  diagnostics behind that capability.
+- `ResolvedModuleBody` exists with explicit import data and `ResolvedDecl`
+  declarations, and is the module-evaluation input. Value declarations already
+  carry `GlobalRef` ids; same-module expression references are rewritten to
+  `CoreExpr::Global`, and imported/context references are rewritten through
+  `ResolvedValueBindings` before elaboration. Module-local value bindings are
+  rebased after imports/context are bound to avoid `GlobalRef` collisions.
 
 Target:
 
-- Resolver owns module graph and import/export semantics.
-- Source loading is delegated to `SourceProvider`.
-- Parsing/lowering/checking/evaluation are pipeline phases.
-- Prelude setup moves into compiler context.
-- Output validation moves into compiler/output layer.
+- Rebuild `resolve` around explicit resolved module/program data structures.
+- Keep concrete source reads delegated to `SourceProvider`, with provider access
+  encapsulated behind loader/pipeline APIs rather than exposed as mutable state.
+- Keep parsing/lowering/checking/evaluation in compiler pipeline phases.
+- Keep prelude setup as explicit compiler context policy.
 
 Potential split:
 
-- `module_graph.rs`: loading/caching/cycles.
+- `loader/graph.rs`: loading cache, resolved-program recording, and cycles.
 - `imports.rs`: import/export validation.
-- `symbols.rs`: binding ids and scopes.
+- `names.rs`: binding ids and scopes.
 - `resolved.rs`: resolved module/program structures.
 
 ### `src/resolve/names.rs`
 
 Current:
 
-- Contains only `BindingId`.
+- Contains `BindingId` as a `GlobalRef` alias, a `BindingIds` allocator,
+  explicit `Namespace`, and `NameScope`.
+- `NameScope` tracks value/type namespaces and reports generic name collisions.
+  Module import binding translates those collisions into import diagnostics.
+- `ResolvedModuleBody` delegates binding-id assignment, same-module
+  value/type-name resolution, external value/type-name resolution, and
+  binding-id rebasing to `ResolvedBodyResolver` / `BindingRebaser` services
+  instead of exposing those transformations as loose helper chains.
+- Local shadow tracking during value-name resolution is owned by
+  `LexicalShadowScope`, so lambda/let shadowing policy is not represented as an
+  ad hoc `Vec<String>` threaded through recursive helpers.
 
 Target:
 
-- Grow into real symbol/binding infrastructure or move binding ids into core.
-- Avoid raw strings for all resolved references after name resolution.
-- Track value/type namespaces explicitly.
+- Grow into real symbol/binding infrastructure across resolved modules.
+- Avoid raw strings for all resolved value references after name resolution.
+- Keep local binders represented as `LocalRef` in evaluator input, while
+  preserving user names as diagnostics metadata.
+- Keep module/global/native value references as `GlobalRef` binding ids rather
+  than overloading local De Bruijn references.
+- Keep same-module, imported, prelude, and context type alias references as
+  `TypeAliasRef` / `ResolvedAlias` after resolved-body construction.
+  `CoreType::Alias(String)` should only represent lowered or intentionally
+  unresolved syntax that will be diagnosed by core type services.
+- Resolve external type names through a narrow binding capability
+  (`ResolvedTypeBindings`) rather than passing module maps into core/type
+  phases.
+- Use explicit namespace scopes for all name-definition checks instead of
+  scattered map membership tests in later compiler phases.
 
 ### `src/lower/desugar.rs`
 
 Current:
 
-- Recursively transforms `FileAst` into another `FileAst`.
+- Recursively transforms `FileAst` into `CoreModule`.
 - Lowers interpolation into `show` and `++`.
+- Keeps the public `SurfaceToCoreLowerer` as an orchestration facade while
+  delegating module, declaration, type, expression, and interpolation lowering
+  to narrow internal services with explicit methods and owned collaborators.
 
 Target:
 
 - Produce core syntax.
 - Own syntax-directed desugaring only.
+- Keep new lowering rules attached to the smallest service that owns the
+  corresponding surface construct instead of adding broad `lower_*` helper
+  methods to the facade.
 - Do not do type-directed option insertion.
 - Do not evaluate.
 - Preserve source-origin metadata for diagnostics.
 
-### `src/typeck/bidir.rs`
+### Removed `src/typeck/bidir.rs`
 
 Current:
 
-- Checks surface expressions.
-- Evaluates expressions while checking.
-- Returns `Value`.
-- Handles literal unions and refinements by validating runtime values.
+- Removed as live code.
+- Core elaboration and runtime value checking now own the behavior that used to
+  live in the surface checker.
 
 Target:
 
@@ -1110,40 +1477,113 @@ Potential split:
 - `aliases.rs`: alias expansion and recursion checks.
 - `records.rs`: closed record logic.
 
-### `src/typeck/unify.rs`
+### Removed `src/typeck/unify.rs`
 
 Current:
 
-- Expands aliases.
-- Checks runtime value/type compatibility.
-- Produces coarse type/value names.
+- Removed as live code.
+- Its old responsibilities are now covered by core type environments,
+  `CoreTypeValidator`, `CoreElaborator`, and `CoreValueChecker`.
 
 Target:
 
-- Move runtime value compatibility out of type unification.
-- Keep type expansion/equality in typeck/core.
+- Do not reintroduce surface-type/runtime-value compatibility logic.
+- Keep type expansion/equality in core-oriented type services.
 - Use richer expected/actual type diagnostics.
 
-### `src/typeck/wf.rs`
+### Removed `src/typeck/wf.rs`
 
 Current:
 
-- Checks type well-formedness and alias recursion.
+- Removed as live code.
+- Surface-type well-formedness is no longer a separate checker path.
+- Core type alias validation now lives in `CoreTypeValidator` and module
+  elaboration.
+- `CoreTypeEnv` stores aliases by name and by `TypeAliasRef`, so
+  `CoreType::ResolvedAlias` can be validated and expanded without relying on a
+  display name.
 
 Target:
 
-- Keep as a separate phase.
-- Return structured diagnostics.
-- Use resolved type symbols instead of raw alias strings after name resolution.
+- Keep well-formedness checks core-native.
+- Do not reintroduce surface `Type` validation after lowering.
+- Route alias expansion, unknown alias diagnostics, and recursive alias
+  diagnostics through core type services.
+
+### Removed `src/typeck/env.rs`
+
+Current:
+
+- Removed as live code.
+- The old aliases mixed surface `Type` aliases with runtime `Value`
+  environments and were no longer used by the core-oriented checker.
+
+Target:
+
+- Keep runtime environments in evaluator/runtime modules.
+- Keep type alias environments in core/type services.
+- Do not add shared environment bags that mix phase-owned data.
 
 ### `src/eval/mod.rs`
 
 Current:
 
-- Evaluates surface `Expr`.
-- Calls type checker for annotations/ascriptions.
-- Contains `Value`, `Env`, closures, binary operations, function-output search,
-  and ReConf value printing.
+- Contains runtime values, primitive operations, core normalization/evaluation
+  modules, and builtin/prelude modules.
+- Synthesized and checked module expressions can evaluate `CoreExpr` directly.
+- `CoreEvaluator` is strict and rejects checked syntax that should have been
+  handled by normalization/elaboration.
+- Checked normalization validates runtime values against `CoreType` through a
+  dedicated core value-checking service.
+- Core refinement predicates are evaluated by a dedicated
+  `CoreRefinementValidator`.
+- Refinement predicate binder-name preparation is owned by
+  `refine::validate::CheckedRefinementPredicateBuilder`; `eval::core` no
+  longer carries a temporary predicate-preparer implementation or depends on
+  type checking for this rewrite.
+- Module type aliases are stored as `CoreType` through `CoreTypeEnv`.
+- Resolved same-module, imported, prelude, and context type alias references
+  use `CoreType::ResolvedAlias` and expand through `CoreTypeEnv::alias_by_ref`.
+- Runtime closures store `CoreExpr`.
+- Runtime function application is exposed through a core-side applicator service;
+  builtin higher-order functions no longer need to construct the legacy surface
+  evaluator to apply closures.
+- The old `CheckedCoreNormalizer` bridge has been removed. Callers that need a
+  checked path elaborate through `CoreElaborator` or `CoreModuleElaborator`,
+  then normalize through `PreparedCoreNormalizer`.
+- `PreparedCoreNormalizer` owns prepared-core normalization and delegates
+  runtime value validation to `CoreValueChecker`.
+- Runtime closure application evaluates prepared core directly instead of
+  re-entering checked normalization.
+- Runtime environments are represented by `Env`, which owns construction,
+  lookup, and extension; callers no longer construct or clone raw environment
+  maps through helper functions.
+- Module state exposes a runtime environment capability through `runtime_env`;
+  declaration evaluation does not inspect or clone the module's raw value map.
+- Checked ascriptions are erased before prepared normalization, so the prepared
+  normalizer no longer has an ascription-to-type-checking path.
+- Module evaluation now receives an `ElaboratedModule` from
+  `CoreModuleElaborator` before evaluating declarations and output.
+- Checked elaborated expressions are evaluated through `PreparedCoreNormalizer`.
+- Module values now track known value types separately from runtime values, and
+  typed value exports preserve that metadata across imports.
+- Compiler module export storage is private and module-owned; the resolved layer
+  receives `ResolvedExports` only through the explicit projection boundary.
+- Module state owns selected import application so import binding does not match
+  directly on resolved export variants.
+- `ResolvedImportSelection` owns traversal of selected exports and applies them
+  through `ResolvedImportTarget`, avoiding map-shaped selection APIs.
+- Module value-type lookup is exposed to elaboration through a
+  `CoreValueTypeContext` adapter, not through the module's internal type map.
+- Arbitrary `BTreeMap<String, CoreType>` values are no longer treated as
+  semantic value-type contexts; callers provide an explicit context object when
+  they need that capability.
+- `ModuleDeclEvaluator` owns execution of `ElaboratedDecl` values and final
+  output evaluation, so declaration execution is separated from module import
+  loading and core elaboration orchestration.
+- Compiler module execution is split across `compiler/module/state.rs`,
+  `compiler/module/imports.rs`, and `compiler/module/eval.rs`, with
+  `compiler/module.rs` acting as the facade.
 
 Target:
 
@@ -1153,6 +1593,8 @@ Target:
 - Move output validation out.
 - Move ReConf value printing into emitter.
 - Keep primitive operation behavior deterministic and tested.
+- Remove all evaluator-related `TEMP(refactor-stage-*)` markers before
+  considering this stage complete.
 
 Potential split:
 
@@ -1162,27 +1604,46 @@ Potential split:
 - `ops.rs`: primitive operations.
 - `native.rs`: native application bridge.
 
+Temporary cleanup targets:
+
+- Keep focused evaluator tests on explicit typed/elaborated core artifacts
+  rather than reintroducing a production checked-normalizer bridge.
+- The surface evaluator and `typeck::bidir` checker bridge have been removed.
+- Reverse core-to-surface lowering has been removed. Keep lowering one-way:
+  surface syntax enters the compiler once, then later phases operate on core.
+
 ### `src/eval/builtins.rs`
 
 Current:
 
-- Defines native function names.
-- Defines arity.
-- Implements runtime calls.
+- Defines `NativeRegistry`, `NativeSpec`, native arity, and runtime
+  implementation selection.
+- Native specs carry type metadata and module evaluation rejects mismatched
+  native declarations.
+- `NativeSpec` encapsulates metadata behind accessors, and `NativeFunction`
+  applies through registry metadata.
+- `NativeImplementation` and `NativeCall` keep runtime implementation dispatch
+  private to the builtin module.
+- Tests verify registry entries and exported prelude native names/types agree.
 
 Target:
 
-- Replace name/arity duplication with registry entries.
-- Keep implementation functions small and testable.
+- Keep native runtime behavior cohesive and testable behind registry-owned
+  implementation services.
 - Report structured native-call diagnostics.
 - Decide whether broader runtime behavior than prelude signatures is intended
   or temporary.
 
-### `src/eval/prelude.rs` And `src/eval/prelude.reconf`
+### `src/compiler/prelude.rs` And `src/eval/prelude.reconf`
 
 Current:
 
-- Prelude is parsed and evaluated through module logic.
+- Prelude is parsed and evaluated through compiler module logic with an empty
+  `ModuleContext`, using `PreludeCompiler`.
+- `PreludeCompiler` returns a `ModuleContext` for normal compiler construction,
+  so loader policy does not call raw prelude module construction directly.
+- `prelude::source` exposes bundled source for registry/prelude agreement
+  checks.
 
 Target:
 
@@ -1194,7 +1655,18 @@ Target:
 
 Current:
 
-- Evaluates predicate expressions using runtime env and aliases.
+- Contains `CoreRefinementValidator` for checked core predicate expressions and
+  normalized values.
+- `CoreRefinementValidator` is a concrete service over an owned runtime
+  environment; unused lifetime/phantom scaffolding has been removed.
+- `CheckedRefinementPredicate` is the predicate validation input and can carry
+  either a borrowed already-checked predicate or an owned predicate prepared by
+  typeck.
+- `refine::validate::CheckedRefinementPredicateBuilder` prepares source-style
+  refinement binder names into `LocalRef` while respecting nested lambda/let
+  shadowing.
+- `eval::core` asks the typeck-owned builder for checked predicate input, then
+  delegates concrete predicate truth validation to `CoreRefinementValidator`.
 
 Target:
 
@@ -1202,33 +1674,42 @@ Target:
 - Receive checked core predicate metadata and normalized value.
 - Return structured refinement diagnostics.
 - Keep concrete evaluation semantics.
+- Move refinement predicates into typed core type artifacts when the core type
+  representation is ready, so `CoreType::Refinement` no longer stores raw
+  source-style predicate expressions.
 
 ### `src/emit/json.rs`
 
 Current:
 
-- Converts runtime `Value` to JSON.
-- Rejects functions.
+- Converts `DataValue` to JSON.
+- No longer inspects runtime closures or native functions.
 
 Target:
 
 - Move to `reconf-compiler`.
 - Consume `DataValue`.
 - Keep JSON ordering deterministic.
-- Keep pretty/compact formatting as emitter options.
+- Keep formatting as `EmitOptions { style: OutputStyle }`.
 
 ### `src/core/`
 
 Current:
 
-- Mostly compatibility wrappers around `eval::Value` and surface AST.
+- Owns the real core AST and core type environment.
+- `CoreTypeEnv` and `CoreTypeValidator` provide the core-native alias context
+  used by module evaluation and runtime normalization.
+- `CoreTypeEnv` exposes alias-definition and generic alias-name visiting
+  capabilities, not raw map iteration, storage conversion, or resolver-specific
+  scope types.
+- The old `core::pretty` helper has been removed because it depended upward on
+  emitters and runtime output validation.
 
 Target:
 
-- Become the real core AST and core type home.
 - Define ids/symbols if they are not owned by resolver.
-- Provide core pretty/debug helpers.
-- Avoid depending on evaluator where possible.
+- Provide core-only debug helpers if needed.
+- Do not depend on evaluator, emitters, terminal UI, or output-format policy.
 
 ### `src/source.rs`
 
@@ -1248,14 +1729,22 @@ Target:
 Current:
 
 - `ErrorCode` table is useful.
-- `Error` supports one optional label.
+- `Error` stores structured labels and notes.
+- Parser duplicate-field diagnostics attach producer-owned labels.
+- Parser empty-interpolation diagnostics attach producer-owned labels.
+- Parser unterminated-interpolation diagnostics attach producer-owned labels.
+- Unknown core type diagnostics use `ErrorCode::TypeUnknown` rather than the
+  uncategorized fallback code.
+- The parser no longer classifies top-level parse failures as empty
+  interpolation by scanning the whole source for `{}`.
+- Top-level unterminated-string classification is tied to the Pest error
+  location and local quote state instead of a whole-file quote count.
 - Span attachment is message-driven.
 
 Target:
 
 - Keep `ErrorCode` as the code registry.
-- Add structured diagnostic data.
-- Support multiple labels and notes.
+- Continue moving phase producers to structured diagnostic data.
 - Move `miette` rendering conversion to CLI/reporter layer.
 - Remove message-based span recovery.
 
@@ -1264,23 +1753,27 @@ Target:
 Current:
 
 - UI code and evaluator wrapper are in the same module tree.
-- `ReplEvaluator` accumulates source text and re-runs the file pipeline.
-- It manually parses, lowers, creates loader, and emits.
+- `ReplEvaluator` delegates persistent declaration state to
+  `compiler::session::CompilerSession`.
+- Declaration-only and expression REPL inputs compile through
+  `CompilerSession`.
+- The old sentinel output expression has been removed from REPL evaluation.
 
 Target:
 
 - Keep UI, highlighter, validator, prompt, and reporter in CLI crate.
 - Make REPL evaluation call shared compiler API.
-- Use memory/session source provider.
+- Use compiler-owned session state and pluggable source providers.
 - Keep semantic highlighting independent from compiler internals.
-- Avoid output suppression based on sentinel output value `"0"` leaking into the
-  compiler API.
+- Grow compiler sessions toward reusable module/type/evaluation state without
+  reintroducing frontend-owned source accumulation.
 
 ### `tests/`
 
 Current:
 
-- Fixture and determinism tests duplicate evaluation helpers.
+- Fixture and determinism tests still have local corpus traversal/evaluation
+  helpers, but normal output rendering now uses `EmitterRegistry`.
 - CLI tests call binary.
 - REPL tests call REPL evaluator internals.
 
@@ -1324,17 +1817,29 @@ Principles:
 Migration:
 
 - Keep current `Error` wrapper initially.
-- Add structured labels to `Error`.
+- `Error` now stores structured labels and notes.
 - Update high-value diagnostics first:
   - recursive aliases;
   - unknown type;
-  - duplicate fields;
   - missing fields;
   - unknown fields;
   - refinement failures;
-  - division by zero;
   - module import errors.
-- Remove `attach_best_effort_span` after producers carry spans directly.
+- Parser duplicate-field diagnostics already carry producer-owned labels.
+- Parser empty-interpolation diagnostics already carry producer-owned labels.
+- Parser unterminated-interpolation diagnostics already carry producer-owned
+  labels.
+- Parser top-level error-code selection no longer uses `{}` or whole-file quote
+  count heuristics.
+- Unknown type diagnostics now have a dedicated error code.
+- Unknown and recursive type diagnostics now attach producer-owned labels from
+  core type origins instead of message-text recovery.
+- Division-by-zero diagnostics now attach producer-owned labels from core
+  expression origins instead of message-text recovery.
+- Refinement failure diagnostics now attach producer-owned labels from checked
+  expression origins instead of message-text recovery.
+- Replace compiler-boundary source attachment after diagnostics carry stable
+  source ids directly.
 
 ## Output And Emitters
 
@@ -1371,6 +1876,9 @@ Emitters:
 
 - JSON emitter.
 - ReConf data emitter.
+- `EmitterRegistry` chooses an emitter by `OutputFormat` from registered
+  `Emitter` implementations rather than hard-coding every concrete emitter in
+  host code.
 - Additional format emitters when added.
 
 Benefits:
@@ -1385,18 +1893,16 @@ Current native metadata is split between:
 
 - `prelude.reconf`;
 - `prelude.rs`;
-- `builtins::declared`;
-- `builtins::arity`;
-- `builtins::call`.
+- `NativeRegistry` entries.
 
 Target registry:
 
 ```rust
 pub struct NativeSpec {
-    pub name: Symbol,
-    pub ty: CoreType,
-    pub arity: usize,
-    pub implementation: NativeImpl,
+    name: Symbol,
+    ty: CoreType,
+    arity: usize,
+    implementation: NativeImplementation,
 }
 
 pub struct NativeRegistry {
@@ -1550,10 +2056,13 @@ Before moving crates, remove duplicated orchestration.
 
 Tasks:
 
-- Add `src/compiler/` or `src/pipeline.rs`.
-- Define `CompileInput`, `CompilerOptions`, `CheckOutput`, `EvalOutput`.
-- Move shared check/eval orchestration out of caller-specific code.
-- Update all current callers to use the pipeline.
+- `src/compiler.rs`, `src/compiler/`, and the internal `CompilerPipeline`
+  service are in place.
+- `CompileInput`, `CompilerOptions`, `CheckOutput`, and `EvalOutput` are in
+  in place; compiler result objects expose methods rather than public storage
+  fields.
+- Shared check/eval orchestration has moved out of caller-specific code.
+- Current CLI, REPL, and integration callers use the compiler pipeline.
 - Keep existing fixtures unchanged.
 
 Exit criteria:
@@ -1584,7 +2093,8 @@ Tasks:
 
 - Define `CoreType`, `CoreExpr`, and module-level core structures.
 - Make lowering produce core syntax.
-- Keep temporary adapters if needed.
+- Keep temporary adapters only when needed to preserve behavior during the
+  migration, and mark each one with `TEMP(refactor-stage-*)`.
 - Move method/interpolation/literal-union lowering into core-lowering path.
 - Preserve current behavior in fixtures.
 
@@ -1598,18 +2108,32 @@ Exit criteria:
 Tasks:
 
 - Define typed/elaborated expression structures.
+- Define a module-level elaboration service.
 - Refactor type checker to return typed core.
+- Implement the local-reference representation for elaborated core:
+  `LocalRef` De Bruijn indices are in place for lambda/let locals and checked
+  refinement predicate validation.
+- Implement the global-reference representation for elaborated core:
+  `GlobalRef` binding ids are in place for known module/global/native value
+  references, and value declaration ids now live in `ResolvedDecl` before
+  elaboration/evaluation. Same-module and imported/context value references are
+  rewritten before elaboration.
 - Make implicit `some` explicit.
 - Make omitted option fields explicit.
 - Keep closed-record behavior.
 - Keep refinement shape checks.
 - Check refinement predicates have type `Bool`, but do not validate predicate
   truth in this stage.
+- Keep any temporary prepared-but-untyped path explicit and marked.
 
 Exit criteria:
 
 - Type checker result is not runtime `Value`.
 - Elaboration can be inspected/tested separately.
+- Evaluator input no longer uses raw local-variable strings as semantic
+  identity for lambda/let locals.
+- Module evaluation consumes `ElaboratedModule`, not raw `CoreModule`
+  declarations.
 
 ### Stage 5: Refactor Evaluator
 
@@ -1618,8 +2142,12 @@ Tasks:
 - Make evaluator consume typed/elaborated core.
 - Remove evaluator dependency on type checker.
 - Move ascription/annotation handling fully into type checking.
+  - Checked ascriptions are erased during elaboration and rejected if they reach
+    prepared normalization.
 - Keep runtime `Value` and closure behavior.
 - Move ReConf value printing out of evaluator.
+- Keep checked-normalization orchestration explicit: elaborate first, then pass
+  typed/prepared core to the evaluator.
 
 Exit criteria:
 
@@ -1634,10 +2162,13 @@ Tasks:
 - Move function-output rejection into output validation.
 - Make JSON emitter consume data output.
 - Move ReConf output printing into emitter layer.
+- Route CLI, REPL, and tests through `EmitterRegistry` unless they are testing a
+  concrete emitter directly.
 
 Exit criteria:
 
 - Emitters do not inspect closures/native functions.
+- Hosts no longer instantiate concrete emitters for normal output selection.
 - Output validation owns function-escape diagnostics.
 
 ### Stage 7: Refactor Diagnostics
@@ -1648,12 +2179,14 @@ Tasks:
 - Thread source ids/spans through phase outputs.
 - Convert important diagnostics phase by phase.
 - Update tests to assert structured diagnostics where appropriate.
-- Remove message-based span recovery after replacement.
+- Replace compiler-boundary source attachment after diagnostics carry stable
+  source ids.
 
 Exit criteria:
 
-- `attach_best_effort_span` is gone or only a temporary fallback with no main
-  diagnostics depending on it.
+- `attach_best_effort_span` and `attach_source_to_labeled_error` are gone.
+- Remaining source attachment is explicit compiler-boundary context, not
+  message-text span recovery.
 
 ### Stage 8: Refactor Builtins And Prelude
 
@@ -1678,7 +2211,7 @@ Tasks:
 - Move CLI/REPL to `reconf-cli`.
 - Add `reconf-wasm` placeholder.
 - Update imports and public APIs.
-- Keep compatibility re-exports only if they reduce migration risk.
+- Drop obsolete re-exports instead of preserving backward API compatibility.
 
 Exit criteria:
 
@@ -1691,6 +2224,7 @@ Exit criteria:
 Tasks:
 
 - Remove adapters and compatibility modules.
+- Remove all `TEMP(refactor-stage-*)` code paths.
 - Make internal modules private.
 - Remove duplicated test helpers.
 - Update examples and docs that mention crate layout.

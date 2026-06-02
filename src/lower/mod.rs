@@ -1,3 +1,3 @@
-pub mod desugar;
+mod desugar;
 
-pub use desugar::lower_file;
+pub use desugar::SurfaceToCoreLowerer;

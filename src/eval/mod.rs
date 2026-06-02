@@ -3,12 +3,12 @@ use std::fmt;
 use std::rc::Rc;
 
 pub mod builtins;
-pub mod prelude;
+pub mod core;
 
+use crate::core::CoreExpr;
+use crate::core::GlobalRef;
 use crate::error::{Error, ErrorCode, Result};
 use crate::eval::builtins::NativeFunction;
-use crate::syntax::surface::{Expr, Type};
-use crate::typeck::bidir::check_expr;
 
 #[derive(Clone)]
 pub enum Value {
@@ -20,7 +20,11 @@ pub enum Value {
     Some(Box<Value>),
     List(Vec<Value>),
     Record(BTreeMap<String, Value>),
-    Closure { param: String, body: Expr, env: Env },
+    CoreClosure {
+        param: String,
+        body: CoreExpr,
+        env: Env,
+    },
     Native(NativeFunction),
 }
 
@@ -35,138 +39,80 @@ impl fmt::Debug for Value {
             Value::Some(x) => write!(f, "some {x:?}"),
             Value::List(xs) => f.debug_list().entries(xs).finish(),
             Value::Record(fields) => f.debug_map().entries(fields).finish(),
-            Value::Closure { .. } => write!(f, "<function>"),
+            Value::CoreClosure { .. } => write!(f, "<function>"),
             Value::Native(function) => write!(f, "<native {}>", function.name),
         }
     }
 }
 
-pub type Env = Rc<BTreeMap<String, Value>>;
-
-pub fn env_with(env: &Env, name: String, value: Value) -> Env {
-    let mut next = (**env).clone();
-    next.insert(name, value);
-    Rc::new(next)
+#[derive(Clone, Default)]
+pub struct Env {
+    globals: Rc<BTreeMap<GlobalRef, Value>>,
+    values: Rc<BTreeMap<String, Value>>,
+    locals: Rc<Vec<Value>>,
 }
 
-pub fn eval(expr: &Expr, env: &Env, aliases: &BTreeMap<String, Type>) -> Result<Value> {
-    match expr {
-        Expr::Int(x) => Ok(Value::Int(*x)),
-        Expr::Float(x) => Ok(Value::Float(*x)),
-        Expr::Bool(x) => Ok(Value::Bool(*x)),
-        Expr::String(x) => Ok(Value::String(x.clone())),
-        Expr::Interp(_) => Err(Error::new("internal error: unlowered interpolation")),
-        Expr::None => Ok(Value::None),
-        Expr::Some(expr) => Ok(Value::Some(Box::new(eval(expr, env, aliases)?))),
-        Expr::Var(name) => env
-            .get(name)
-            .cloned()
-            .ok_or_else(|| Error::new(format!("unknown identifier `{name}`"))),
-        Expr::List(items) => items
-            .iter()
-            .map(|item| eval(item, env, aliases))
-            .collect::<Result<Vec<_>>>()
-            .map(Value::List),
-        Expr::Record(fields) => fields
-            .iter()
-            .map(|(name, expr)| Ok((name.clone(), eval(expr, env, aliases)?)))
-            .collect::<Result<BTreeMap<_, _>>>()
-            .map(Value::Record),
-        Expr::Field(expr, name) => match eval(expr, env, aliases)? {
-            Value::Record(fields) => fields
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Error::new(format!("unknown field `{name}`"))),
-            _ => Err(Error::new(format!("unknown field `{name}`"))),
-        },
-        Expr::Dot(expr, name) => {
-            let receiver = eval(expr, env, aliases)?;
-            if let Value::Record(fields) = &receiver
-                && let Some(value) = fields.get(name)
-            {
-                return Ok(value.clone());
-            }
-            let method = env
-                .get(name)
-                .cloned()
-                .ok_or_else(|| Error::new(format!("unknown field `{name}`")))?;
-            apply(method, receiver, aliases)
+impl Env {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn from_values(values: BTreeMap<String, Value>) -> Self {
+        Self {
+            globals: Rc::new(BTreeMap::new()),
+            values: Rc::new(values),
+            locals: Rc::new(Vec::new()),
         }
-        Expr::If(cond, then_expr, else_expr) => match eval(cond, env, aliases)? {
-            Value::Bool(true) => eval(then_expr, env, aliases),
-            Value::Bool(false) => eval(else_expr, env, aliases),
-            _ => Err(Error::new("type mismatch: if condition must be Bool")),
-        },
-        Expr::Let(name, annotation, value, body) => {
-            let value = if let Some(ty) = annotation {
-                check_expr(value, ty, env, aliases)?
-            } else {
-                eval(value, env, aliases)?
-            };
-            eval(body, &env_with(env, name.clone(), value), aliases)
+    }
+
+    pub fn from_bindings(
+        globals: BTreeMap<GlobalRef, Value>,
+        values: BTreeMap<String, Value>,
+    ) -> Self {
+        Self {
+            globals: Rc::new(globals),
+            values: Rc::new(values),
+            locals: Rc::new(Vec::new()),
         }
-        Expr::Lambda(param, _ty, body) => Ok(Value::Closure {
-            param: param.clone(),
-            body: *body.clone(),
-            env: env.clone(),
-        }),
-        Expr::Apply(function, arg) => {
-            let function = eval(function, env, aliases)?;
-            let arg = eval(arg, env, aliases)?;
-            apply(function, arg, aliases)
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.values.get(name)
+    }
+
+    pub fn global(&self, binding: GlobalRef) -> Option<&Value> {
+        self.globals.get(&binding)
+    }
+
+    pub fn local(&self, index: usize) -> Option<&Value> {
+        self.locals
+            .len()
+            .checked_sub(index + 1)
+            .and_then(|position| self.locals.get(position))
+    }
+
+    pub fn extend(&self, name: impl Into<String>, value: Value) -> Self {
+        let mut next = (*self.values).clone();
+        next.insert(name.into(), value);
+        Self {
+            globals: self.globals.clone(),
+            values: Rc::new(next),
+            locals: self.locals.clone(),
         }
-        Expr::Ascribe(expr, ty) => check_expr(expr, ty, env, aliases),
-        Expr::Unary(op, expr) => {
-            let value = eval(expr, env, aliases)?;
-            match (op.as_str(), value) {
-                ("!", Value::Bool(x)) => Ok(Value::Bool(!x)),
-                ("-", Value::Int(x)) => Ok(Value::Int(-x)),
-                ("-", Value::Float(x)) => Ok(Value::Float(-x)),
-                _ => Err(Error::new(format!("type mismatch: invalid unary `{op}`"))),
-            }
-        }
-        Expr::Binary(op, a, b) => {
-            if op == "&&" {
-                return match eval(a, env, aliases)? {
-                    Value::Bool(false) => Ok(Value::Bool(false)),
-                    Value::Bool(true) => match eval(b, env, aliases)? {
-                        Value::Bool(x) => Ok(Value::Bool(x)),
-                        _ => Err(Error::new("type mismatch: && expects Bool")),
-                    },
-                    _ => Err(Error::new("type mismatch: && expects Bool")),
-                };
-            }
-            if op == "||" {
-                return match eval(a, env, aliases)? {
-                    Value::Bool(true) => Ok(Value::Bool(true)),
-                    Value::Bool(false) => match eval(b, env, aliases)? {
-                        Value::Bool(x) => Ok(Value::Bool(x)),
-                        _ => Err(Error::new("type mismatch: || expects Bool")),
-                    },
-                    _ => Err(Error::new("type mismatch: || expects Bool")),
-                };
-            }
-            binary(op, eval(a, env, aliases)?, eval(b, env, aliases)?)
+    }
+
+    pub fn push_local(&self, value: Value) -> Self {
+        let mut locals = (*self.locals).clone();
+        locals.push(value);
+        Self {
+            globals: self.globals.clone(),
+            values: self.values.clone(),
+            locals: Rc::new(locals),
         }
     }
 }
 
-pub fn apply_value(function: Value, arg: Value) -> Result<Value> {
-    apply(function, arg, &BTreeMap::new())
-}
-
-fn apply(function: Value, arg: Value, aliases: &BTreeMap<String, Type>) -> Result<Value> {
-    match function {
-        Value::Closure { param, body, env } => eval(&body, &env_with(&env, param, arg), aliases),
-        Value::Native(function) => function.apply(arg),
-        _ => Err(Error::with_code(
-            ErrorCode::TypeApplyNonFunction,
-            "type mismatch: applying non-function",
-        )),
-    }
-}
-
-fn binary(op: &str, a: Value, b: Value) -> Result<Value> {
+pub(crate) fn binary(op: &str, a: Value, b: Value) -> Result<Value> {
     match (op, a, b) {
         ("+", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
         ("-", Value::Int(a), Value::Int(b)) => Ok(Value::Int(a - b)),
@@ -195,7 +141,7 @@ fn binary(op: &str, a: Value, b: Value) -> Result<Value> {
     }
 }
 
-fn value_eq(a: &Value, b: &Value) -> bool {
+pub(crate) fn value_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Int(a), Value::Int(b)) => a == b,
         (Value::Float(a), Value::Float(b)) => a == b,
@@ -213,39 +159,4 @@ fn value_eq(a: &Value, b: &Value) -> bool {
         }
         _ => false,
     }
-}
-
-pub fn contains_function(value: &Value) -> bool {
-    match value {
-        Value::Closure { .. } | Value::Native(_) => true,
-        Value::Some(value) => contains_function(value),
-        Value::List(items) => items.iter().any(contains_function),
-        Value::Record(fields) => fields.values().any(contains_function),
-        _ => false,
-    }
-}
-
-pub fn emit(value: &Value) -> Result<String> {
-    Ok(match value {
-        Value::Int(x) => x.to_string(),
-        Value::Float(x) => x.to_string(),
-        Value::Bool(x) => x.to_string(),
-        Value::String(x) => format!("{x:?}"),
-        Value::None => "none".to_string(),
-        Value::Some(x) => format!("some {}", emit(x)?),
-        Value::List(items) => {
-            let parts = items.iter().map(emit).collect::<Result<Vec<_>>>()?;
-            format!("[{}]", parts.join(", "))
-        }
-        Value::Record(fields) => {
-            let parts = fields
-                .iter()
-                .map(|(name, value)| Ok(format!("{name} = {}", emit(value)?)))
-                .collect::<Result<Vec<_>>>()?;
-            format!("{{ {} }}", parts.join(", "))
-        }
-        Value::Closure { .. } | Value::Native(_) => {
-            return Err(Error::new("function escaped into output"));
-        }
-    })
 }

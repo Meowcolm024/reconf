@@ -1,4 +1,5 @@
-pub mod cli;
+mod cli;
+pub mod compiler;
 pub mod core;
 pub mod diagnostic;
 pub mod emit;
@@ -12,6 +13,10 @@ pub mod source;
 pub mod syntax;
 pub mod typeck;
 
-pub use emit::json::emit_json;
+pub use emit::{DataValue, EmitOptions, Emitter, EmitterRegistry, OutputFormat, OutputStyle};
 pub use error::{Error, Result};
-pub use resolve::modules::run;
+
+pub fn run_cli() -> Result<()> {
+    repl::reporter::init_reporter();
+    cli::run()
+}

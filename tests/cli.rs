@@ -128,6 +128,33 @@ fn check_reports_imported_file_error_locations() {
     assert!(stderr.contains("empty interpolation"), "{stderr}");
 }
 
+#[test]
+fn check_does_not_reject_function_output() {
+    let dir = tempfile_dir();
+    let file = dir.join("function_output.reconf");
+    fs::write(
+        &file,
+        r#"
+        let hello = (g : Bool) =>
+          if g then "Hallo" else "Hello";
+
+        hello
+        "#,
+    )
+    .unwrap();
+
+    let output = Command::new(bin())
+        .args(["check", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn tempfile_dir() -> std::path::PathBuf {
     let mut dir = std::env::temp_dir();
     dir.push(format!(

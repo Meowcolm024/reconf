@@ -2,13 +2,9 @@ use std::path::PathBuf;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
-use crate::diagnostic::attach_best_effort_span;
-use crate::emit::json::emit_json;
+use crate::compiler::{CompileInput, Compiler};
+use crate::emit::{EmitOptions, EmitterRegistry, OutputStyle};
 use crate::error::ErrorCode;
-use crate::eval::emit;
-use crate::lower::lower_file;
-use crate::resolve::modules::{Loader, eval_file};
-use crate::syntax::parser::parse;
 use crate::{Result, repl};
 
 #[derive(Parser)]
@@ -56,20 +52,21 @@ pub fn run() -> Result<()> {
 
     match cli.command {
         Some(Command::Check { file }) => {
-            let _ = eval_path(&file)?;
+            let _ = Compiler::new().check(CompileInput::from(file))?;
             Ok(())
         }
         Some(Command::Eval {
             file,
             format,
             pretty,
-            compact: _,
+            compact,
         }) => {
-            let value = eval_path(&file)?;
-            let output = match format {
-                OutputFormat::Json => emit_json(&value, pretty)?,
-                OutputFormat::Reconf => emit(&value)?,
+            let compiled = Compiler::new().eval(CompileInput::from(file))?;
+            let options = EmitOptions {
+                style: CliOutputStyle::from_flags(pretty, compact).into_output_style(),
             };
+            let output =
+                EmitterRegistry::new().emit(format.into(), compiled.data_output(), &options)?;
             println!("{output}");
             Ok(())
         }
@@ -82,22 +79,36 @@ pub fn run() -> Result<()> {
     }
 }
 
+struct CliOutputStyle {
+    pretty: bool,
+    compact: bool,
+}
+
+impl CliOutputStyle {
+    fn from_flags(pretty: bool, compact: bool) -> Self {
+        Self { pretty, compact }
+    }
+
+    fn into_output_style(self) -> OutputStyle {
+        match (self.pretty, self.compact) {
+            (true, _) => OutputStyle::Pretty,
+            (_, true) | (false, false) => OutputStyle::Compact,
+        }
+    }
+}
+
+impl From<OutputFormat> for crate::emit::OutputFormat {
+    fn from(format: OutputFormat) -> Self {
+        match format {
+            OutputFormat::Json => Self::Json,
+            OutputFormat::Reconf => Self::Reconf,
+        }
+    }
+}
+
 fn explain_code(code: &str) -> String {
     ErrorCode::from_code(code)
         .map(|code| code.info())
         .map(|info| format!("{}: {}", info.code, info.explanation))
         .unwrap_or_else(|| "unknown diagnostic code".to_string())
-}
-
-fn eval_path(path: &PathBuf) -> Result<crate::eval::Value> {
-    let src = std::fs::read_to_string(path).map_err(|error| {
-        crate::Error::new(format!("unknown import `{}`: {error}", path.display()))
-    })?;
-    let name = path.display().to_string();
-    let ast = lower_file(parse(&src).map_err(|error| attach_best_effort_span(error, &name, &src))?);
-    let mut loader = Loader::default();
-    let base_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let module = eval_file(&mut loader, base_dir, ast)
-        .map_err(|error| attach_best_effort_span(error, &name, &src))?;
-    Ok(module.values.get("$output").unwrap().clone())
 }

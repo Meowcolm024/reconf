@@ -1,6 +1,5 @@
 fn main() {
-    reconf::repl::reporter::init_reporter();
-    if let Err(error) = reconf::cli::run() {
+    if let Err(error) = reconf::run_cli() {
         eprintln!("{:?}", miette::Report::new(error));
         std::process::exit(1);
     }

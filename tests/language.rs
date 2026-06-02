@@ -1,15 +1,13 @@
-use std::path::Path;
-
-use reconf::eval::emit;
-use reconf::lower::lower_file;
-use reconf::resolve::modules::{Loader, eval_file};
-use reconf::syntax::parser::parse;
+use reconf::compiler::{CompileInput, Compiler, SourceInput};
+use reconf::emit::{EmitOptions, EmitterRegistry, OutputFormat};
 
 fn eval_src(src: &str) -> reconf::Result<String> {
-    let ast = lower_file(parse(src)?);
-    let mut loader = Loader::default();
-    let module = eval_file(&mut loader, Path::new("."), ast)?;
-    emit(module.values.get("$output").unwrap())
+    let compiled = Compiler::new().eval(CompileInput::from(SourceInput::new("test", ".", src)))?;
+    EmitterRegistry::new().emit(
+        OutputFormat::Reconf,
+        compiled.data_output(),
+        &EmitOptions::default(),
+    )
 }
 
 #[test]

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct FileAst {
     pub decls: Vec<Decl>,
-    pub output: Expr,
+    pub output: Option<Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +32,7 @@ pub enum Decl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
+    Spanned(Box<Type>, std::ops::Range<usize>),
     Int,
     Float,
     Bool,
@@ -51,6 +52,7 @@ pub enum Type {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
+    Spanned(Box<Expr>, std::ops::Range<usize>),
     Int(i64),
     Float(f64),
     Bool(bool),

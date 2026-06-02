@@ -1,118 +1,214 @@
+use crate::core::{CoreDecl, CoreExpr, CoreImport, CoreModule, CoreType};
 use crate::syntax::surface::{Decl, Expr, FileAst, StrPart, Type};
 
-pub fn lower_file(file: FileAst) -> FileAst {
-    FileAst {
-        decls: file.decls.into_iter().map(lower_decl).collect(),
-        output: lower_expr(file.output),
+#[derive(Default)]
+pub struct SurfaceToCoreLowerer {
+    modules: ModuleLowerer,
+    types: TypeLowerer,
+    exprs: ExprLowerer,
+}
+
+impl SurfaceToCoreLowerer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn lower_file(&mut self, file: FileAst) -> CoreModule {
+        self.modules.lower(file)
+    }
+
+    pub fn lower_type(&mut self, ty: Type) -> CoreType {
+        self.types.lower(ty)
+    }
+
+    pub fn lower_expr(&mut self, expr: Expr) -> CoreExpr {
+        self.exprs.lower(expr)
     }
 }
 
-fn lower_decl(decl: Decl) -> Decl {
-    match decl {
-        Decl::Import { path, names } => Decl::Import { path, names },
-        Decl::Native { export, name, ty } => Decl::Native {
-            export,
-            name,
-            ty: lower_type(ty),
-        },
-        Decl::Type { export, name, ty } => Decl::Type {
-            export,
-            name,
-            ty: lower_type(ty),
-        },
-        Decl::Let {
-            export,
-            name,
-            annotation,
-            expr,
-        } => Decl::Let {
-            export,
-            name,
-            annotation: annotation.map(lower_type),
-            expr: lower_expr(expr),
-        },
-    }
+#[derive(Default)]
+struct ModuleLowerer {
+    declarations: DeclLowerer,
+    output: ExprLowerer,
 }
 
-fn lower_type(ty: Type) -> Type {
-    match ty {
-        Type::Option(inner) => Type::Option(Box::new(lower_type(*inner))),
-        Type::List(inner) => Type::List(Box::new(lower_type(*inner))),
-        Type::Record(fields) => Type::Record(
-            fields
-                .into_iter()
-                .map(|(name, ty)| (name, lower_type(ty)))
-                .collect(),
-        ),
-        Type::LiteralUnion(choices) => Type::LiteralUnion(choices),
-        Type::Refinement { binder, base, pred } => Type::Refinement {
-            binder,
-            base: Box::new(lower_type(*base)),
-            pred: Box::new(lower_expr(*pred)),
-        },
-        Type::Function(input, output) => {
-            Type::Function(Box::new(lower_type(*input)), Box::new(lower_type(*output)))
+impl ModuleLowerer {
+    fn lower(&mut self, file: FileAst) -> CoreModule {
+        let mut imports = Vec::new();
+        let mut decls = Vec::new();
+
+        for decl in file.decls {
+            match self.declarations.lower(decl) {
+                LoweredDecl::Import(import) => imports.push(import),
+                LoweredDecl::Decl(decl) => decls.push(decl),
+            }
         }
-        ty => ty,
+
+        CoreModule {
+            imports,
+            decls,
+            output: file.output.map(|expr| self.output.lower(expr)),
+        }
     }
 }
 
-fn lower_expr(expr: Expr) -> Expr {
-    match expr {
-        Expr::Interp(parts) => lower_interpolation(parts),
-        Expr::Some(expr) => Expr::Some(Box::new(lower_expr(*expr))),
-        Expr::List(items) => Expr::List(items.into_iter().map(lower_expr).collect()),
-        Expr::Record(fields) => Expr::Record(
-            fields
-                .into_iter()
-                .map(|(name, expr)| (name, lower_expr(expr)))
-                .collect(),
-        ),
-        Expr::Field(expr, name) => Expr::Field(Box::new(lower_expr(*expr)), name),
-        Expr::Dot(expr, name) => Expr::Dot(Box::new(lower_expr(*expr)), name),
-        Expr::If(cond, then_expr, else_expr) => Expr::If(
-            Box::new(lower_expr(*cond)),
-            Box::new(lower_expr(*then_expr)),
-            Box::new(lower_expr(*else_expr)),
-        ),
-        Expr::Let(name, annotation, value, body) => Expr::Let(
-            name,
-            annotation.map(lower_type),
-            Box::new(lower_expr(*value)),
-            Box::new(lower_expr(*body)),
-        ),
-        Expr::Lambda(param, ty, body) => {
-            Expr::Lambda(param, lower_type(ty), Box::new(lower_expr(*body)))
+#[derive(Default)]
+struct DeclLowerer {
+    types: TypeLowerer,
+    exprs: ExprLowerer,
+}
+
+impl DeclLowerer {
+    fn lower(&mut self, decl: Decl) -> LoweredDecl {
+        match decl {
+            Decl::Import { path, names } => LoweredDecl::Import(CoreImport { path, names }),
+            Decl::Native { export, name, ty } => LoweredDecl::Decl(CoreDecl::Native {
+                export,
+                name,
+                ty: self.types.lower(ty),
+            }),
+            Decl::Type { export, name, ty } => LoweredDecl::Decl(CoreDecl::Type {
+                export,
+                name,
+                ty: self.types.lower(ty),
+            }),
+            Decl::Let {
+                export,
+                name,
+                annotation,
+                expr,
+            } => LoweredDecl::Decl(CoreDecl::Let {
+                export,
+                name,
+                annotation: annotation.map(|ty| self.types.lower(ty)),
+                expr: self.exprs.lower(expr),
+            }),
         }
-        Expr::Apply(function, arg) => {
-            Expr::Apply(Box::new(lower_expr(*function)), Box::new(lower_expr(*arg)))
-        }
-        Expr::Ascribe(expr, ty) => Expr::Ascribe(Box::new(lower_expr(*expr)), lower_type(ty)),
-        Expr::Unary(op, expr) => Expr::Unary(op, Box::new(lower_expr(*expr))),
-        Expr::Binary(op, left, right) => Expr::Binary(
-            op,
-            Box::new(lower_expr(*left)),
-            Box::new(lower_expr(*right)),
-        ),
-        expr => expr,
     }
 }
 
-fn lower_interpolation(parts: Vec<StrPart>) -> Expr {
-    let mut exprs = parts.into_iter().filter_map(|part| match part {
-        StrPart::Text(text) if text.is_empty() => None,
-        StrPart::Text(text) => Some(Expr::String(text)),
-        StrPart::Expr(expr) => Some(Expr::Apply(
-            Box::new(Expr::Var("show".to_string())),
-            Box::new(lower_expr(expr)),
-        )),
-    });
+#[derive(Default)]
+struct TypeLowerer;
 
-    let Some(first) = exprs.next() else {
-        return Expr::String(String::new());
-    };
+impl TypeLowerer {
+    fn lower(&mut self, ty: Type) -> CoreType {
+        match ty {
+            Type::Spanned(ty, span) => CoreType::Spanned(Box::new(self.lower(*ty)), span),
+            Type::Int => CoreType::Int,
+            Type::Float => CoreType::Float,
+            Type::Bool => CoreType::Bool,
+            Type::String => CoreType::String,
+            Type::Option(inner) => CoreType::Option(Box::new(self.lower(*inner))),
+            Type::List(inner) => CoreType::List(Box::new(self.lower(*inner))),
+            Type::Record(fields) => CoreType::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, ty)| (name, self.lower(ty)))
+                    .collect(),
+            ),
+            Type::LiteralUnion(choices) => CoreType::LiteralUnion(choices),
+            Type::Refinement { binder, base, pred } => CoreType::Refinement {
+                binder,
+                base: Box::new(self.lower(*base)),
+                pred: Box::new(ExprLowerer::default().lower(*pred)),
+            },
+            Type::Function(input, output) => {
+                CoreType::Function(Box::new(self.lower(*input)), Box::new(self.lower(*output)))
+            }
+            Type::Alias(name) => CoreType::Alias(name),
+        }
+    }
+}
 
-    exprs.fold(first, |left, right| {
-        Expr::Binary("++".to_string(), Box::new(left), Box::new(right))
-    })
+#[derive(Default)]
+struct ExprLowerer {
+    types: TypeLowerer,
+}
+
+impl ExprLowerer {
+    fn lower(&mut self, expr: Expr) -> CoreExpr {
+        match expr {
+            Expr::Spanned(expr, span) => CoreExpr::Spanned(Box::new(self.lower(*expr)), span),
+            Expr::Int(value) => CoreExpr::Int(value),
+            Expr::Float(value) => CoreExpr::Float(value),
+            Expr::Bool(value) => CoreExpr::Bool(value),
+            Expr::String(value) => CoreExpr::String(value),
+            Expr::Interp(parts) => InterpolationLowerer::new(self).lower(parts),
+            Expr::None => CoreExpr::None,
+            Expr::Some(expr) => CoreExpr::Some(Box::new(self.lower(*expr))),
+            Expr::Var(name) => CoreExpr::Var(name),
+            Expr::List(items) => {
+                CoreExpr::List(items.into_iter().map(|item| self.lower(item)).collect())
+            }
+            Expr::Record(fields) => CoreExpr::Record(
+                fields
+                    .into_iter()
+                    .map(|(name, expr)| (name, self.lower(expr)))
+                    .collect(),
+            ),
+            Expr::Field(expr, name) | Expr::Dot(expr, name) => {
+                CoreExpr::Field(Box::new(self.lower(*expr)), name)
+            }
+            Expr::If(cond, then_expr, else_expr) => CoreExpr::If(
+                Box::new(self.lower(*cond)),
+                Box::new(self.lower(*then_expr)),
+                Box::new(self.lower(*else_expr)),
+            ),
+            Expr::Let(name, annotation, value, body) => CoreExpr::Let(
+                name,
+                annotation.map(|ty| self.types.lower(ty)),
+                Box::new(self.lower(*value)),
+                Box::new(self.lower(*body)),
+            ),
+            Expr::Lambda(param, ty, body) => {
+                CoreExpr::Lambda(param, self.types.lower(ty), Box::new(self.lower(*body)))
+            }
+            Expr::Apply(function, arg) => {
+                CoreExpr::Apply(Box::new(self.lower(*function)), Box::new(self.lower(*arg)))
+            }
+            Expr::Ascribe(expr, ty) => {
+                CoreExpr::Ascribe(Box::new(self.lower(*expr)), self.types.lower(ty))
+            }
+            Expr::Unary(op, expr) => CoreExpr::Unary(op, Box::new(self.lower(*expr))),
+            Expr::Binary(op, left, right) => CoreExpr::Binary(
+                op,
+                Box::new(self.lower(*left)),
+                Box::new(self.lower(*right)),
+            ),
+        }
+    }
+}
+
+struct InterpolationLowerer<'a> {
+    exprs: &'a mut ExprLowerer,
+}
+
+impl<'a> InterpolationLowerer<'a> {
+    fn new(exprs: &'a mut ExprLowerer) -> Self {
+        Self { exprs }
+    }
+
+    fn lower(&mut self, parts: Vec<StrPart>) -> CoreExpr {
+        let mut exprs = parts.into_iter().filter_map(|part| match part {
+            StrPart::Text(text) if text.is_empty() => None,
+            StrPart::Text(text) => Some(CoreExpr::String(text)),
+            StrPart::Expr(expr) => Some(CoreExpr::Apply(
+                Box::new(CoreExpr::Var("show".to_string())),
+                Box::new(self.exprs.lower(expr)),
+            )),
+        });
+
+        let Some(first) = exprs.next() else {
+            return CoreExpr::String(String::new());
+        };
+
+        exprs.fold(first, |left, right| {
+            CoreExpr::Binary("++".to_string(), Box::new(left), Box::new(right))
+        })
+    }
+}
+
+enum LoweredDecl {
+    Import(CoreImport),
+    Decl(CoreDecl),
 }

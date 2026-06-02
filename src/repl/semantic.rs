@@ -73,6 +73,7 @@ impl TypeCollector {
 
     fn visit_type(&mut self, ty: &Type) {
         match ty {
+            Type::Spanned(ty, _) => self.visit_type(ty),
             Type::Int | Type::Float | Type::Bool | Type::String | Type::LiteralUnion(_) => {}
             Type::Option(inner) | Type::List(inner) => self.visit_type(inner),
             Type::Record(fields) => {
@@ -96,6 +97,7 @@ impl TypeCollector {
 
     fn visit_expr(&mut self, expr: &Expr) {
         match expr {
+            Expr::Spanned(expr, _) => self.visit_expr(expr),
             Expr::Int(_)
             | Expr::Float(_)
             | Expr::Bool(_)

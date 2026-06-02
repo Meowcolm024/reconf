@@ -19,9 +19,7 @@ pub fn parse(src: &str) -> Result<FileAst> {
 }
 
 fn parse_error(src: &str, error: PestError<Rule>) -> Error {
-    let code = if src.contains("{}") {
-        ErrorCode::ParseEmptyInterpolation
-    } else if src.matches('"').count() % 2 == 1 {
+    let code = if is_unterminated_string_error(src, &error) {
         ErrorCode::ParseUnterminatedString
     } else {
         ErrorCode::Reconf
@@ -41,7 +39,40 @@ fn parse_error(src: &str, error: PestError<Rule>) -> Error {
     };
 
     Error::with_code(code, format!("parse error: {message}"))
-        .with_source_span("<source>", src, span, message)
+        .with_label(span, message)
+        .with_placeholder_source(src)
+}
+
+fn is_unterminated_string_error(src: &str, error: &PestError<Rule>) -> bool {
+    let ErrorVariant::ParsingError { .. } = &error.variant else {
+        return false;
+    };
+
+    let start = match error.location {
+        InputLocation::Pos(pos) => pos,
+        InputLocation::Span((start, _)) => start,
+    };
+    unclosed_quote_before(src, start).is_some()
+}
+
+fn unclosed_quote_before(src: &str, position: usize) -> Option<usize> {
+    let mut open_quote = None;
+    let mut escaped = false;
+    let end = position.saturating_add(1).min(src.len());
+    for (index, ch) in src[..end].char_indices() {
+        match (escaped, ch) {
+            (true, _) => escaped = false,
+            (false, '\\') => escaped = true,
+            (false, '"') => {
+                open_quote = match open_quote {
+                    Some(_) => None,
+                    None => Some(index),
+                };
+            }
+            (false, _) => {}
+        }
+    }
+    open_quote
 }
 
 fn parse_expected_message(positives: &[Rule], negatives: &[Rule]) -> String {
@@ -55,6 +86,20 @@ fn parse_expected_message(positives: &[Rule], negatives: &[Rule]) -> String {
         (true, false) => format!("unexpected {}", rule_list(negatives)),
         (true, true) => "unknown parsing error".to_string(),
     }
+}
+
+fn duplicate_field_error(pair: &Pair<'_, Rule>) -> Error {
+    let name = pair.as_str();
+    let span = pair.as_span();
+    Error::with_code(
+        ErrorCode::RecordDuplicateField,
+        format!("duplicate field `{name}`"),
+    )
+    .with_label(
+        span.start()..span.end(),
+        format!("duplicate field `{name}`"),
+    )
+    .with_placeholder_source(span.get_input())
 }
 
 fn rule_list(rules: &[Rule]) -> String {
@@ -165,10 +210,7 @@ fn build_file(pair: Pair<'_, Rule>) -> Result<FileAst> {
             _ => {}
         }
     }
-    Ok(FileAst {
-        decls,
-        output: output.ok_or_else(|| Error::new("parse error: missing output expression"))?,
-    })
+    Ok(FileAst { decls, output })
 }
 
 fn build_decl(pair: Pair<'_, Rule>) -> Result<Decl> {
@@ -253,6 +295,14 @@ fn build_decl(pair: Pair<'_, Rule>) -> Result<Decl> {
 }
 
 fn build_type(pair: Pair<'_, Rule>) -> Result<Type> {
+    let span = pair.as_span();
+    Ok(Type::Spanned(
+        Box::new(build_type_node(pair)?),
+        span.start()..span.end(),
+    ))
+}
+
+fn build_type_node(pair: Pair<'_, Rule>) -> Result<Type> {
     match pair.as_rule() {
         Rule::ty | Rule::primary_ty => build_type(only(pair)?),
         Rule::fun_ty => {
@@ -292,13 +342,11 @@ fn build_type(pair: Pair<'_, Rule>) -> Result<Type> {
                     let mut fields = BTreeMap::new();
                     for field in inner.into_inner() {
                         let mut items = field.into_inner();
-                        let name = items.next().unwrap().as_str().to_string();
+                        let name_pair = items.next().unwrap();
+                        let name = name_pair.as_str().to_string();
                         let ty = build_type(items.next().unwrap())?;
                         if fields.insert(name.clone(), ty).is_some() {
-                            return Err(Error::with_code(
-                                ErrorCode::RecordDuplicateField,
-                                format!("duplicate field `{name}`"),
-                            ));
+                            return Err(duplicate_field_error(&name_pair));
                         }
                     }
                     Ok(Type::Record(fields))
@@ -332,6 +380,14 @@ fn build_type(pair: Pair<'_, Rule>) -> Result<Type> {
 }
 
 fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr> {
+    let span = pair.as_span();
+    Ok(Expr::Spanned(
+        Box::new(build_expr_node(pair)?),
+        span.start()..span.end(),
+    ))
+}
+
+fn build_expr_node(pair: Pair<'_, Rule>) -> Result<Expr> {
     match pair.as_rule() {
         Rule::expr | Rule::plain_expr | Rule::primary => build_expr(only(pair)?),
         Rule::let_expr => {
@@ -390,7 +446,7 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr> {
         Rule::int_lit => Ok(Expr::Int(pair.as_str().parse().unwrap())),
         Rule::float_lit => Ok(Expr::Float(pair.as_str().parse().unwrap())),
         Rule::bool_lit => Ok(Expr::Bool(pair.as_str() == "true")),
-        Rule::string_lit => build_string(pair.as_str()),
+        Rule::string_lit => build_string(pair),
         Rule::none_expr => Ok(Expr::None),
         Rule::some_expr => Ok(Expr::Some(Box::new(build_expr(only(pair)?)?))),
         Rule::option_expr => build_expr(only(pair)?),
@@ -404,13 +460,11 @@ fn build_expr(pair: Pair<'_, Rule>) -> Result<Expr> {
             let mut fields = BTreeMap::new();
             for field in pair.into_inner() {
                 let mut inner = field.into_inner();
-                let name = inner.next().unwrap().as_str().to_string();
+                let name_pair = inner.next().unwrap();
+                let name = name_pair.as_str().to_string();
                 let value = build_expr(inner.next().unwrap())?;
                 if fields.insert(name.clone(), value).is_some() {
-                    return Err(Error::with_code(
-                        ErrorCode::RecordDuplicateField,
-                        format!("duplicate field `{name}`"),
-                    ));
+                    return Err(duplicate_field_error(&name_pair));
                 }
             }
             Ok(Expr::Record(fields))
@@ -483,7 +537,9 @@ fn build_postfix(pair: Pair<'_, Rule>) -> Result<Expr> {
     Ok(expr)
 }
 
-fn build_string(raw: &str) -> Result<Expr> {
+fn build_string(pair: Pair<'_, Rule>) -> Result<Expr> {
+    let span = pair.as_span();
+    let raw = pair.as_str();
     let unquoted = unquote(raw)?;
     let mut parts = Vec::new();
     let mut text = String::new();
@@ -515,13 +571,22 @@ fn build_string(raw: &str) -> Result<Expr> {
                     i += 1;
                 }
                 if depth != 0 {
+                    let interpolation_span =
+                        unterminated_interpolation_span(span.start(), raw, start, chars.len());
                     return Err(Error::with_code(
                         ErrorCode::ParseUnterminatedString,
                         "parse error: unterminated interpolation",
-                    ));
+                    )
+                    .with_label(interpolation_span, "unterminated interpolation")
+                    .with_placeholder_source(span.get_input()));
                 }
                 let inner: String = chars[start..i - 1].iter().collect();
-                parts.push(StrPart::Expr(parse_expr_fragment(&inner)?));
+                let interpolation_span = interpolation_span(span.start(), raw, start, i - 1);
+                parts.push(StrPart::Expr(parse_expr_fragment(
+                    &inner,
+                    span.get_input(),
+                    interpolation_span,
+                )?));
             }
             c => {
                 text.push(c);
@@ -541,15 +606,51 @@ fn build_string(raw: &str) -> Result<Expr> {
     Ok(Expr::Interp(parts))
 }
 
-fn parse_expr_fragment(src: &str) -> Result<Expr> {
+fn parse_expr_fragment(
+    src: &str,
+    outer_source: &str,
+    interpolation_span: std::ops::Range<usize>,
+) -> Result<Expr> {
     if src.trim().is_empty() {
         return Err(Error::with_code(
             ErrorCode::ParseEmptyInterpolation,
             "parse error: empty interpolation",
-        ));
+        )
+        .with_label(interpolation_span, "empty interpolation")
+        .with_placeholder_source(outer_source));
     }
     let mut pairs = ReconfParser::parse(Rule::expr, src).map_err(|e| parse_error(src, e))?;
     build_expr(pairs.next().unwrap())
+}
+
+fn interpolation_span(
+    string_start: usize,
+    raw: &str,
+    inner_start: usize,
+    inner_end: usize,
+) -> std::ops::Range<usize> {
+    if inner_start == inner_end
+        && let Some(offset) = raw.find("{}")
+    {
+        return string_start + offset..string_start + offset + 2;
+    }
+
+    let content_start = string_start + 1;
+    content_start + inner_start.saturating_sub(1)..content_start + inner_end + 1
+}
+
+fn unterminated_interpolation_span(
+    string_start: usize,
+    raw: &str,
+    inner_start: usize,
+    content_end: usize,
+) -> std::ops::Range<usize> {
+    let content_start = string_start + 1;
+    let start = content_start + inner_start.saturating_sub(1);
+    let end = content_start + content_end;
+
+    let raw_content_end = string_start + raw.len().saturating_sub(1);
+    start..end.min(raw_content_end).max(start)
 }
 
 fn unquote(raw: &str) -> Result<String> {

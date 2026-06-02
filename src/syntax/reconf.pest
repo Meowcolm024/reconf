@@ -1,4 +1,4 @@
-file = { SOI ~ decl* ~ expr ~ EOI }
+file = { SOI ~ decl* ~ expr? ~ EOI }
 
 decl = _{ import_decl | export_native_decl | export_type_decl | export_let_decl | native_decl | type_decl | top_let_decl }
 import_decl = { "import" ~ string_lit ~ ":" ~ name ~ ("," ~ name)* ~ ";" }

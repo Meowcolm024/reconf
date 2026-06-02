@@ -2,11 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 
-use reconf::diagnostic::attach_best_effort_span;
-use reconf::emit::json::emit_json;
-use reconf::eval::Value;
-use reconf::lower::lower_file;
-use reconf::resolve::modules::{Loader, eval_file};
+use reconf::compiler::{CompileInput, Compiler};
+use reconf::emit::{DataValue, EmitOptions, EmitterRegistry, OutputFormat, OutputStyle};
 use reconf::syntax::parser::parse;
 use reconf::syntax::surface::Decl;
 use reconf::{Error, Result};
@@ -49,20 +46,10 @@ fn source_for_expected(expected: &Path) -> PathBuf {
     expected.with_extension("reconf")
 }
 
-fn eval_source_file(path: &Path) -> Result<Value> {
-    let src = fs::read_to_string(path)
-        .map_err(|error| Error::new(format!("unknown import `{}`: {error}", path.display())))?;
-    let name = path.display().to_string();
-    let ast = lower_file(parse(&src).map_err(|error| attach_best_effort_span(error, &name, &src))?);
-    let mut loader = Loader::default();
-    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let module = eval_file(&mut loader, base_dir, ast)
-        .map_err(|error| attach_best_effort_span(error, &name, &src))?;
-    module
-        .values
-        .get("$output")
-        .cloned()
-        .ok_or_else(|| Error::new("internal error: missing output"))
+fn eval_source_file(path: &Path) -> Result<DataValue> {
+    Ok(Compiler::new()
+        .eval(CompileInput::from(path))?
+        .into_data_output())
 }
 
 fn render_error(error: &Error) -> String {
@@ -132,7 +119,15 @@ impl FixtureTarget for JsonTarget {
                 render_error(&error)
             );
         });
-        let actual = emit_json(&value, true).expect("fixture output should be JSON data");
+        let actual = EmitterRegistry::new()
+            .emit(
+                OutputFormat::Json,
+                &value,
+                &EmitOptions {
+                    style: OutputStyle::Pretty,
+                },
+            )
+            .expect("fixture output should be JSON data");
         let expected = fs::read_to_string(expected_path)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", expected_path.display()));
         assert_json_eq(&actual, &expected, source_path);
